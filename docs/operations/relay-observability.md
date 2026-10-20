@@ -206,3 +206,10 @@ PR preview builds run the PR's code in that environment. In CI only the upload s
 Without it, uploads are skipped with a warning and stacks stay minified. Each ingest request is one
 `relay.mobile_telemetry.ingest` span; `relay.mobile_telemetry.outcome` is `forwarded`,
 `rate_limited`, `body_too_large`, `upstream_unavailable`, or `upstream_timeout`.
+
+To test without a relay stage, run `vp run --filter t3code-relay mobile-telemetry:local`. It serves
+the relay's ingest and symbolication on port 4318, stores uploaded maps and forwarded payloads in a
+temp directory instead of R2 and Axiom, and prints each exception's symbolication outcome. Build
+the app with `T3CODE_RELAY_URL` set to this machine's LAN address and that port, and upload maps
+with the `MOBILE_SOURCEMAPS_R2` value it prints. Observe drops reports from debug builds, so test
+with a release build.
