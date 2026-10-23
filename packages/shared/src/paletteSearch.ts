@@ -9,13 +9,14 @@
  * and often the thread was used, within limits.
  */
 
-import { scoreSubsequenceMatch } from "./searchRanking.ts";
+import type { OrchestrationV2ThreadOpens } from "@t3tools/contracts";
 
 const ALPHANUMERIC = /[\p{L}\p{N}]/u;
 const LOWERCASE = /\p{Ll}/u;
 const UPPERCASE = /\p{Lu}/u;
 const DIGIT = /\p{N}/u;
 const COMBINING_MARKS = /\p{M}/gu;
+const APOSTROPHE = /['’]/;
 
 interface SearchField {
   /** Case- and accent-folded text. */
@@ -71,10 +72,14 @@ function foldSearchField(source: string): SearchField {
   const sourceIndex: number[] = [];
   let identity = true;
   let previous = "";
+  let beforePrevious = "";
   let index = 0;
   for (const character of source) {
+    // "Julius’s": a possessive or contraction does not start a word.
+    const afterApostrophe = APOSTROPHE.test(previous) && ALPHANUMERIC.test(beforePrevious);
     const startsWord =
       ALPHANUMERIC.test(character) &&
+      !afterApostrophe &&
       (previous === "" ||
         !ALPHANUMERIC.test(previous) ||
         (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
@@ -87,6 +92,7 @@ function foldSearchField(source: string): SearchField {
       wordStarts.push(offset === 0 && startsWord ? 1 : 0);
       sourceIndex.push(index);
     }
+    beforePrevious = previous;
     previous = character;
     index += character.length;
   }
@@ -156,6 +162,8 @@ const SUBSEQUENCE = 0.2;
 
 interface TokenMatch extends SearchRange {
   readonly score: number;
+  /** Separate ranges, for letters spread out across the field. */
+  readonly letters?: ReadonlyArray<SearchRange>;
 }
 
 /**
@@ -196,15 +204,17 @@ function matchToken(
   for (let index = 0; index < field.text.length; index++) {
     if (!field.wordStarts[index]) continue;
     const word = field.text.slice(index, wordEnd(field, index));
-    // A three-letter token only forgives a swapped pair: any other edit matches too much.
-    const lengths = token.length === 3 ? [3] : [token.length - 1, token.length, token.length + 1];
+    // Short tokens only forgive a swapped pair: any other edit of a three- or
+    // four-letter word matches too much ("cron" would find every "con…").
+    const swapOnly = token.length <= 4;
+    const lengths = swapOnly ? [token.length] : [token.length - 1, token.length, token.length + 1];
     // People rarely mistype the first letter, so a typo keeps it, unless it swaps the first two.
     const firstLetterKept = word[0] === token[0] || (word[0] === token[1] && word[1] === token[0]);
     if (!firstLetterKept) continue;
     for (const length of lengths) {
       if (length > word.length) continue;
       const prefix = word.slice(0, length);
-      if (token.length === 3 ? isSwap(token, prefix) : withinOneEdit(token, prefix)) {
+      if (swapOnly ? isSwap(token, prefix) : withinOneEdit(token, prefix)) {
         return { score: TYPO, start: index, end: index + length };
       }
     }
@@ -212,20 +222,31 @@ function matchToken(
   return best ?? (subsequence ? matchSubsequence(field, token) : null);
 }
 
+// Letters may skip at most this many characters each on average; looser
+// matches find any long title ("posthog" in "Projectless threads without Git").
+const SUBSEQUENCE_GAP_PER_LETTER = 2;
+
 /**
- * The letters of `token` in order, starting at a word start: "fxsb" for "Fix
- * sidebar", as in VS Code or Raycast. Weakest match, tried last.
+ * The letters of `token` in order and close together, starting at a word
+ * start: "fxsb" for "Fix sidebar", as in VS Code or Raycast. Weakest match,
+ * tried last.
  */
 function matchSubsequence(field: SearchField, token: string): TokenMatch | null {
   if (token.length < 3 || DIGIT.test(token)) return null;
-  for (let index = 0; index < field.text.length; index++) {
-    if (!field.wordStarts[index] || field.text[index] !== token[0]) continue;
-    if (scoreSubsequenceMatch(field.text.slice(index), token) !== null) {
-      return { score: SUBSEQUENCE, start: index, end: index + 1 };
-    }
-    return null;
+  let start = -1;
+  for (let index = 0; index < field.text.length && start === -1; index++) {
+    if (field.wordStarts[index] && field.text[index] === token[0]) start = index;
   }
-  return null;
+  if (start === -1) return null;
+  const letters: SearchRange[] = [{ start, end: start + 1 }];
+  for (const letter of token.slice(1)) {
+    const at = field.text.indexOf(letter, letters.at(-1)!.end);
+    if (at === -1) return null;
+    letters.push({ start: at, end: at + 1 });
+  }
+  const end = letters.at(-1)!.end;
+  if (end - start - token.length > SUBSEQUENCE_GAP_PER_LETTER * token.length) return null;
+  return { score: SUBSEQUENCE, start, end, letters };
 }
 
 interface WeightedSearchField {
@@ -295,7 +316,7 @@ function matchSearchFields(
     }
     if (best === 0) return null;
     strong &&= atWordStart;
-    if (bestPrimary) primaryRanges.push(bestPrimary);
+    if (bestPrimary) primaryRanges.push(...(bestPrimary.letters ?? [bestPrimary]));
     total += best;
   }
   let quality = total / tokens.length;
@@ -340,11 +361,12 @@ export function messageSearchTokens(query: string): {
 }
 
 /**
- * Whether a message token must start a word. Short Latin tokens match inside
- * too many words ("fts" in "drafts"); CJK text has no word boundaries.
+ * Whether a message token must start a word. Short tokens match inside too
+ * many words ("fts" in "drafts"). Only plain ASCII tokens are checked: the
+ * server's check is SQLite GLOB, which only knows ASCII letters.
  */
 export function messageTokenNeedsWordStart(token: string): boolean {
-  return Array.from(token).length < 4 && !hasCjkWord(token);
+  return token.length < 4 && /^[a-z0-9]+$/.test(token);
 }
 
 /**
@@ -426,12 +448,8 @@ function decay(ageMs: number): number {
   return 2 ** (-Math.max(0, ageMs) / SEARCH_RECENCY_HALF_LIFE_MS);
 }
 
-/** Server-stored open history: a decayed open count and the queries that led to opens. */
-export interface ThreadOpenStats {
-  readonly openedAt: number;
-  readonly score: number;
-  readonly queries: ReadonlyArray<string>;
-}
+/** Server-stored open history; see `OrchestrationV2ThreadOpens`. */
+export type ThreadOpenStats = OrchestrationV2ThreadOpens;
 
 /**
  * Next open stats after an open at `at`. `query` is the palette query that
@@ -451,11 +469,13 @@ export function recordThreadOpen(
         THREAD_SEARCH_PICK_LIMIT,
       )
     : (previous?.queries ?? []);
+  const pickedAt = pick ? at : previous?.pickedAt;
+  const picks = pickedAt === undefined ? {} : { pickedAt };
   if (previous !== null && at - previous.openedAt < THREAD_OPEN_DEDUPE_MS) {
-    return { ...previous, queries };
+    return { ...previous, ...picks, queries };
   }
   const score = previous === null ? 1 : previous.score * decay(at - previous.openedAt) + 1;
-  return { openedAt: at, score, queries };
+  return { openedAt: at, ...picks, score, queries };
 }
 
 export interface ThreadSearchSubject {
@@ -517,7 +537,8 @@ function matchReference(
 }
 
 // Strong enough that a thread you just picked for this query wins over a better
-// but unused match. It fades with the thread's last open, so old picks let go.
+// but unused match. It fades from the last pick, so old picks let go even if
+// the thread is opened in other ways.
 const PICK_BOOST = 3;
 // A remembered pick alone lists its thread (one picked through a message
 // match, say), but two letters are too little to go on.
@@ -526,7 +547,7 @@ const PICK_ONLY_MIN_LENGTH = 3;
 function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: number): number {
   const { opens } = thread;
   return opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
-    ? PICK_BOOST * decay(now - opens.openedAt)
+    ? PICK_BOOST * decay(now - (opens.pickedAt ?? opens.openedAt))
     : 0;
 }
 

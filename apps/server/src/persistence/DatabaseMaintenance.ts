@@ -11,12 +11,13 @@ import { isSqlError } from "effect/sql/SqlError";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import { indexedMessageCondition } from "../orchestration-v2/messageSearchIndex.ts";
 
 /**
  * The message search index is keyed by message rowid. VACUUM keeps those
  * rowids today, but SQLite does not promise it, so rebuild the index after one
- * instead of trusting it. Databases from before migration 69 have no index.
- * The row filter matches migration 69.
+ * instead of trusting it. Databases from before migration 69, or on an SQLite
+ * without FTS5 trigrams, have no index.
  */
 const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch")(function* (
   sql: SqlClient.SqlClient,
@@ -31,14 +32,10 @@ const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT rowid, json_extract(payload_json, '$.text')
-    FROM orchestration_v2_projection_messages
-    WHERE streaming = 0
-      AND (
-        role = 'assistant'
-        OR (role = 'user' AND COALESCE(json_extract(payload_json, '$.createdBy'), 'user') = 'user')
-      )
-      AND json_extract(payload_json, '$.text') IS NOT NULL
+    SELECT messages.rowid, json_extract(messages.payload_json, '$.text')
+    FROM orchestration_v2_projection_messages AS messages
+    WHERE ${indexedMessageCondition(sql)}
+      AND json_extract(messages.payload_json, '$.text') IS NOT NULL
   `;
 });
 

@@ -34,9 +34,9 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
     if (!serverThread?.id || serverThread.lastVisitedAt === undefined) return;
     if (recordedOpenRef.current === threadKey) return;
     recordedOpenRef.current = threadKey;
-    const openedAt = serverThread.opens ? Date.parse(serverThread.opens.openedAt) : NaN;
     // The server would merge it into the last open anyway.
-    if (Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
+    const openedAt = serverThread.opens?.openedAt;
+    if (openedAt !== undefined && Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
     lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
     lastVisitDispatchAtRef.current = Date.now();
     void visitThreadMutation({

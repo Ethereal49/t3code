@@ -28,6 +28,7 @@ import { primaryServerProvidersAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
+import { formatRelativeTimeLabel } from "../timestampFormat";
 import { buildThreadActionItems, ITEM_ICON_CLASS } from "./CommandPalette.logic";
 import { useEnvironmentLookups, useProjectLookups } from "./CommandPaletteLookups";
 import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
@@ -179,6 +180,10 @@ export function useCommandPaletteThreadItems(input: {
     return [
       {
         ...rest,
+        // When the matching message was written, not when the thread last moved.
+        ...(match.messageCreatedAt
+          ? { timestamp: formatRelativeTimeLabel(match.messageCreatedAt) }
+          : {}),
         threadContentMatch: {
           source: match.source,
           snippet: match.snippet,

@@ -413,9 +413,13 @@ function ThreadVisitWatermark(props: {
     if (!showContent || selectedThreadLastVisitedAt === undefined) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
-    const openedAt = selectedThreadOpenedAt ? Date.parse(selectedThreadOpenedAt) : NaN;
     // The server would merge it into the last open anyway.
-    if (Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
+    if (
+      selectedThreadOpenedAt !== undefined &&
+      Date.now() - selectedThreadOpenedAt < THREAD_OPEN_DEDUPE_MS
+    ) {
+      return;
+    }
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
     void visitThread({

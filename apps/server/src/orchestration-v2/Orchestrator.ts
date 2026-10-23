@@ -2571,9 +2571,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // Opens are timed by the server clock so devices with skewed clocks agree.
     const opens = command.opened
       ? recordThreadOpen(
-          thread.opens
-            ? { ...thread.opens, openedAt: DateTime.toEpochMillis(thread.opens.openedAt) }
-            : null,
+          thread.opens ?? null,
           DateTime.toEpochMillis(occurredAt),
           command.searchQuery,
         )
@@ -2591,7 +2589,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...thread,
         ...(movesForward ? { lastVisitedAt: visitedAt.value } : {}),
-        ...(opens ? { opens: { ...opens, openedAt: DateTime.makeUnsafe(opens.openedAt) } } : {}),
+        ...(opens ? { opens } : {}),
       },
     });
   });

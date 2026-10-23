@@ -285,7 +285,7 @@ describe("buildThreadActionItems", () => {
         makeThread({
           title: "New onboarding flow",
           latestUserMessageAt: "2026-10-22T00:00:00.000Z",
-          opens: { openedAt: "2026-10-22T00:00:00.000Z", score: 7, queries: [] },
+          opens: { openedAt: Date.parse("2026-10-22T00:00:00.000Z"), score: 7, queries: [] },
         }),
       ],
       projectByKey: new Map(),

@@ -26,6 +26,7 @@ import {
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
+import { indexedMessageCondition } from "./messageSearchIndex.ts";
 
 export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   "ThreadSearchError",
@@ -60,6 +61,7 @@ const SearchRow = Schema.Struct({
 });
 
 const SNIPPET_LENGTH = 240;
+const MESSAGE_HIT_LIMIT = 5000;
 
 function escapeGlob(token: string): string {
   return token.replace(/[[*?]/g, (character) => `[${character}]`);
@@ -184,18 +186,11 @@ export const make = Effect.gen(function* () {
                 messages.message_id,
                 0 AS score
               FROM orchestration_v2_projection_messages AS messages
-              WHERE messages.streaming = 0
-                AND (
-                  messages.role = 'assistant'
-                  OR (
-                    messages.role = 'user'
-                    AND COALESCE(json_extract(messages.payload_json, '$.createdBy'), 'user') = 'user'
-                  )
-                )
+              WHERE ${indexedMessageCondition(sql)}
             `
             : sql`
               SELECT
-                messages.rowid AS message_rowid,
+                orchestration_v2_message_search.rowid AS message_rowid,
                 messages.thread_id,
                 messages.role,
                 messages.created_at,
@@ -220,6 +215,10 @@ export const make = Effect.gen(function* () {
                 GLOB '*[^a-z0-9]' || token.value || '*'
             )
           )
+        -- Newest hits first, and only so many: a very common word stops early
+        -- instead of checking every message. Hidden threads are already out.
+        ORDER BY message_rowid DESC
+        LIMIT ${MESSAGE_HIT_LIMIT}
       ),
       ranked AS (
         SELECT
@@ -345,9 +344,7 @@ export const make = Effect.gen(function* () {
           activityAt: Date.parse(
             row.latestUserMessageAt ?? DateTime.formatIso(row.thread.updatedAt),
           ),
-          opens: row.thread.opens
-            ? { ...row.thread.opens, openedAt: DateTime.toEpochMillis(row.thread.opens.openedAt) }
-            : null,
+          opens: row.thread.opens ?? null,
         },
       ]),
     );

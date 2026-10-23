@@ -186,12 +186,8 @@ export interface EnvironmentThreadShell {
    * local visited state they keep.
    */
   readonly lastVisitedAt?: string | null;
-  /** Server-tracked open history for search ranking; see `OrchestrationV2ThreadOpens`. */
-  readonly opens?: {
-    readonly openedAt: string;
-    readonly score: number;
-    readonly queries: ReadonlyArray<string>;
-  } | null;
+  /** Server-tracked open history for search ranking. */
+  readonly opens?: import("@t3tools/contracts").OrchestrationV2ThreadOpens | null;
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
   readonly deletedAt: string | null;
   readonly source: OrchestrationV2ThreadShell;
@@ -338,7 +334,7 @@ export function presentThreadShell(
     ...(thread.lastVisitedAt === undefined
       ? {}
       : { lastVisitedAt: nullableIso(thread.lastVisitedAt) }),
-    opens: thread.opens ? { ...thread.opens, openedAt: iso(thread.opens.openedAt) } : null,
+    opens: thread.opens ?? null,
     titleRegeneration:
       thread.titleRegeneration == null
         ? null

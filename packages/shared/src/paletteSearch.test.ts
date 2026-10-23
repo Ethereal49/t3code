@@ -85,6 +85,16 @@ describe("scoreThreadSearch", () => {
       thread("Relay pairing", { activityAt: NOW }),
     ];
     expect(rankTitles("rel", stale)).toEqual(["Relay pairing", "Release checklist"]);
+    // Opening an old pick some other way does not revive it over a newer pick.
+    const reopened = [
+      thread("Release checklist", {
+        opens: { openedAt: NOW - DAY, pickedAt: NOW - 30 * DAY, score: 2, queries: ["rel"] },
+      }),
+      thread("Relay pairing", {
+        opens: { openedAt: NOW - DAY, pickedAt: NOW - DAY, score: 1, queries: ["rel"] },
+      }),
+    ];
+    expect(rankTitles("rel", reopened)).toEqual(["Relay pairing", "Release checklist"]);
   });
 
   it("matches pull request numbers, branches, and projects with every token somewhere", () => {
@@ -147,10 +157,29 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     ).toEqual(["Share auth across worktrees", "Fix oauth redirect"]);
   });
 
-  it("matches spread-out letters as a last resort", () => {
+  it("matches spread-out letters as a last resort, highlighting each", () => {
     expect(rankTitles("fxsb", [thread("Fix sidebar lag"), thread("Unrelated work")])).toEqual([
       "Fix sidebar lag",
     ]);
+    expect(
+      scoreThreadSearch("fxsb", thread("Fix sidebar lag"), NOW, { typos: true })?.titleRanges,
+    ).toEqual([
+      { start: 0, end: 1 },
+      { start: 2, end: 3 },
+      { start: 4, end: 5 },
+      { start: 8, end: 9 },
+    ]);
+  });
+
+  it("finds nothing rather than an unrelated thread when no word matches", () => {
+    const threads = [
+      thread("Projectless threads without Git"),
+      thread("Concern about connection setup"),
+      thread("Setting up the sentinel"),
+    ];
+    for (const query of ["posthog", "cron", "stripe", "gpu"]) {
+      expect(rankTitles(query, threads), query).toEqual([]);
+    }
   });
 
   it("matches pieces of references that hold a number, and environment names", () => {
@@ -217,9 +246,14 @@ describe("rankSearchGroups", () => {
 describe("recordThreadOpen", () => {
   it("decays the open count, merges quick reopens, and keeps the latest picked queries", () => {
     const first = recordThreadOpen(null, NOW, "  Upl ");
-    expect(first).toEqual({ openedAt: NOW, score: 1, queries: ["upl"] });
+    expect(first).toEqual({ openedAt: NOW, pickedAt: NOW, score: 1, queries: ["upl"] });
     const reopened = recordThreadOpen(first, NOW + 60_000, "uploadthing");
-    expect(reopened).toEqual({ openedAt: NOW, score: 1, queries: ["uploadthing", "upl"] });
+    expect(reopened).toEqual({
+      openedAt: NOW,
+      pickedAt: NOW + 60_000,
+      score: 1,
+      queries: ["uploadthing", "upl"],
+    });
     const later = recordThreadOpen(reopened, NOW + SEARCH_RECENCY_HALF_LIFE_MS, "x".repeat(50));
     expect(later.score).toBe(1.5);
     expect(later.queries).toEqual(["x".repeat(32), "uploadthing", "upl"]);

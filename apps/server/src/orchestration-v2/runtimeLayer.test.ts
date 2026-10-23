@@ -5574,19 +5574,25 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("thread opens", (it) 
             visitedAt: "2000-01-01T00:00:00.000Z",
             ...input,
           });
-        const opens = Effect.map(orchestrator.getShellSnapshot(), (shell) => {
-          const opens = shell.threads.find((thread) => thread.id === threadId)?.opens ?? null;
-          return opens && { ...opens, openedAt: DateTime.toEpochMillis(opens.openedAt) };
-        });
+        const opens = Effect.map(
+          orchestrator.getShellSnapshot(),
+          (shell) => shell.threads.find((thread) => thread.id === threadId)?.opens ?? null,
+        );
         const start = DateTime.toEpochMillis(yield* DateTime.now);
 
         yield* visit({ opened: true, searchQuery: "  Upl " });
-        assert.deepEqual(yield* opens, { openedAt: start, score: 1, queries: ["upl"] });
+        assert.deepEqual(yield* opens, {
+          openedAt: start,
+          pickedAt: start,
+          score: 1,
+          queries: ["upl"],
+        });
 
         yield* TestClock.adjust("1 minute");
         yield* visit({ opened: true, searchQuery: "Uploadthing docs" });
         assert.deepEqual(yield* opens, {
           openedAt: start,
+          pickedAt: start + 60_000,
           score: 1,
           queries: ["uploadthing docs", "upl"],
         });
@@ -5598,6 +5604,8 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("thread opens", (it) 
         assert.closeTo(later!.score, 1 + 2 ** (-(14 * 24 * 60 + 1) / (14 * 24 * 60)), 1e-9);
         assert.equal(later!.openedAt, DateTime.toEpochMillis(yield* DateTime.now));
         assert.deepEqual(later!.queries, ["uploadthing docs", "upl"]);
+        // Opening without a query keeps the time of the last pick.
+        assert.equal(later!.pickedAt, start + 60_000);
       }),
   );
 });

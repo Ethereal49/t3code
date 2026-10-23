@@ -111,7 +111,7 @@ export function threadSearchSubject(
     environmentLabel: environmentLabel ?? null,
     pullRequests: threadSearchPullRequests(thread),
     activityAt: Number.isFinite(activityAt) ? activityAt : null,
-    opens: thread.opens ? { ...thread.opens, openedAt: Date.parse(thread.opens.openedAt) } : null,
+    opens: thread.opens ?? null,
   };
 }
 
