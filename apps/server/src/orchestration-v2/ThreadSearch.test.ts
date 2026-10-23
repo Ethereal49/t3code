@@ -141,7 +141,7 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       for (const match of ['"needle"', null]) {
         const plan = yield* sql<{
           readonly detail: string;
-        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null })}`;
+        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null, excludedThreadIds: "[]" })}`;
         assert.isFalse(
           plan.some((row) => row.detail.includes("TEMP B-TREE")),
           plan.map((row) => row.detail).join("\n"),
@@ -300,6 +300,34 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
       assert.sameMembers(
         matches.map((match) => match.threadId),
         older.map(([key]) => ThreadId.make(`thread:fragment-${key}`)),
+      );
+    }),
+  );
+
+  it.effect("finds an older word when one busy thread fills the newest hits", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:busy-word");
+      yield* createProject(project);
+      const older = ThreadId.make("thread:rust-word");
+      const busy = ThreadId.make("thread:rustling");
+      yield* Effect.forEach(
+        [
+          thread(older, project),
+          message(older, "rust-word", "user", "Rust migration rationale"),
+          thread(busy, project),
+          ...Array.from({ length: 2000 }, (_, index) =>
+            message(busy, `rustling-${index}`, "assistant", "rustling leaves outside"),
+          ),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "rust" });
+      assert.deepEqual(
+        matches.map((match) => match.threadId),
+        [older, busy],
       );
     }),
   );

@@ -601,7 +601,8 @@ interface FoldedMessage {
  * missed. Native normalization keeps one character per source character for
  * most text, so it folds a message of any length cheaply and word starts come
  * from the source. Text it would shift (decomposed accents, ligatures) is
- * folded per character instead, which is slow, so only its start is read.
+ * folded character by character with source positions, ASCII taking a fast
+ * path, so it also reads the whole message.
  */
 function foldMessage(text: string): FoldedMessage {
   const native = text.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
@@ -613,15 +614,29 @@ function foldMessage(text: string): FoldedMessage {
       endsWord: (end) => endsWordAt(text, end),
     };
   }
-  const field = foldSearchField(text.slice(0, 20_000));
+  let folded = "";
+  const sourceIndex: number[] = [];
+  for (let index = 0; index < text.length;) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) {
+      folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : text[index];
+      sourceIndex.push(index);
+      index += 1;
+      continue;
+    }
+    const character = String.fromCodePoint(text.codePointAt(index)!);
+    for (const unit of foldCharacter(character).split("")) {
+      folded += unit;
+      sourceIndex.push(index);
+    }
+    index += character.length;
+  }
+  const sourceAt = (index: number) => sourceIndex[index] ?? text.length;
   return {
-    text: field.text,
-    sourceAt: (index) => field.sourceIndex?.[index] ?? index,
-    startsWord: (index) => field.wordStarts[index] === 1,
-    endsWord: (end) =>
-      end === field.text.length ||
-      field.wordStarts[end] === 1 ||
-      !ALPHANUMERIC.test(field.text[end]!),
+    text: folded,
+    sourceAt,
+    startsWord: (index) => startsWordAt(text, sourceAt(index)),
+    endsWord: (end) => end >= folded.length || endsWordAt(text, sourceAt(end)),
   };
 }
 
@@ -781,9 +796,13 @@ const THREAD_SEARCH_PICK_LIMIT = 3;
 /** Picked queries are stored this long; clients send no more. */
 const THREAD_SEARCH_PICK_MAX_LENGTH = 32;
 
-/** `query` cut to the stored pick length without splitting an emoji in two. */
+/**
+ * `query` as a pick is stored and compared: folded, then cut to the stored
+ * length without splitting an emoji in two. Clients and the server both use
+ * it, so a long pick matches its query again.
+ */
 export function pickedQuery(query: string): string {
-  const cut = query.trim().slice(0, THREAD_SEARCH_PICK_MAX_LENGTH);
+  const cut = foldSearchQuery(query).slice(0, THREAD_SEARCH_PICK_MAX_LENGTH);
   return (/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut).trim();
 }
 
@@ -803,7 +822,7 @@ export function recordThreadOpen(
   at: number,
   query: string | undefined,
 ): ThreadOpenStats {
-  const pick = pickedQuery(foldSearchQuery(query ?? ""));
+  const pick = pickedQuery(query ?? "");
   const earlier = previous?.picks ?? [];
   const picks = pick
     ? [{ query: pick, at }, ...earlier.filter((entry) => entry.query !== pick)].slice(

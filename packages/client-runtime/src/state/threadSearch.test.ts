@@ -12,9 +12,9 @@ import {
   claimThreadOpen,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
-  claimPickedOpen,
+  handOffPick,
   nextShownOrder,
-  takePickedOpen,
+  takeThreadOpen,
   threadSearchMatchKey,
   threadSearchSubject,
   visibleThreadSearch,
@@ -191,11 +191,12 @@ it("keeps shown message rows in place when a slower environment answers", () => 
   expect(nextShownOrder(second, "needles", ["b1", "a1"]).keys).toEqual(["b1", "a1"]);
 });
 
-it("lets the thread view skip the visit a palette pick just sent, once", () => {
-  const visitedAt = "2026-10-01T00:00:00.000Z";
-  claimPickedOpen(envA, "thread-picked", 0, visitedAt);
-  expect(takePickedOpen(envA, "thread-picked", visitedAt)).toBe(true);
-  expect(takePickedOpen(envA, "thread-picked", visitedAt)).toBe(false);
-  claimPickedOpen(envA, "thread-moved", 0, visitedAt);
-  expect(takePickedOpen(envA, "thread-moved", "2026-10-02T00:00:00.000Z")).toBe(false);
+it("hands a palette pick's query to the thread view's open, once and while fresh", () => {
+  handOffPick(envA, "thread-picked", "upl", 0);
+  expect(takeThreadOpen(envA, "thread-picked", 1_000)).toEqual({ send: true, searchQuery: "upl" });
+  // Taken once; a second open within ten minutes is not sent.
+  expect(takeThreadOpen(envA, "thread-picked", 2_000)).toEqual({ send: false });
+  // A pick no view took in time lets go.
+  handOffPick(envA, "thread-stale", "upl", 0);
+  expect(takeThreadOpen(envA, "thread-stale", 60_000)).toEqual({ send: true });
 });

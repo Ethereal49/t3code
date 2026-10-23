@@ -1,7 +1,8 @@
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
-  claimPickedOpen,
+  claimThreadOpen,
+  handOffPick,
   nextShownOrder,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
@@ -449,7 +450,8 @@ export function CommandPalette(props: {
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
   }, [activeThread, items, messageMatchKeys, now, query]);
-  // The pick is an open with its query, so the thread view skips its own.
+  // The thread view sends the open with the picked query. The open thread
+  // mounts no view, so its pick is sent here.
   const runResult = (item: CommandPaletteResult) => {
     const thread =
       item.kind === "thread" && query.trim() && !query.startsWith(">")
@@ -458,16 +460,18 @@ export function CommandPalette(props: {
           )
         : undefined;
     if (thread && thread.lastVisitedAt !== undefined) {
-      claimPickedOpen(thread.environmentId, thread.id, Date.now(), thread.updatedAt);
-      void visitThread({
-        environmentId: thread.environmentId,
-        input: {
-          threadId: thread.id,
-          visitedAt: thread.updatedAt,
-          opened: true,
-          searchQuery: pickedQuery(query),
-        },
-      });
+      const searchQuery = pickedQuery(query);
+      const isOpen =
+        activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
+      if (isOpen) {
+        claimThreadOpen(thread.environmentId, thread.id, Date.now());
+        void visitThread({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, visitedAt: thread.updatedAt, opened: true, searchQuery },
+        });
+      } else {
+        handOffPick(thread.environmentId, thread.id, searchQuery, Date.now());
+      }
     }
     item.run();
   };

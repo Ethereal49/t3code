@@ -25,9 +25,11 @@ const sentThreadOpens = new Map<string, number>();
 // When this client last opened each thread, sent or not, so recent threads
 // follow quick switches the server merges.
 const localThreadOpens = new Map<string, number>();
-// Opens a palette pick sent, by the watermark they carried, until the thread
-// view mounts and takes them.
-const pickedOpens = new Map<string, string>();
+// Palette picks waiting for the thread view they open, which sends the open
+// with the picked query: one owner for every open. A pick no view takes (the
+// navigation failed) lets go after a while.
+const PICK_HANDOFF_MS = 30_000;
+const pendingPicks = new Map<string, { readonly query: string; readonly at: number }>();
 
 /**
  * Records that this client opened a thread, and says whether to send the open
@@ -44,28 +46,34 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
 }
 
 /**
- * A palette pick sends the open itself, with its query, marking the thread
- * visited at `visitedAt`; the thread view takes it with `takePickedOpen`.
+ * Hands a palette pick's query to the thread view it opens. Picking the thread
+ * that is already open mounts no view, so the palette sends that open itself.
  */
-export function claimPickedOpen(
+export function handOffPick(
   environmentId: EnvironmentId,
   threadId: string,
+  query: string,
   now: number,
-  visitedAt: string,
 ) {
-  claimThreadOpen(environmentId, threadId, now);
-  pickedOpens.set(`${environmentId}:${threadId}`, visitedAt);
+  pendingPicks.set(`${environmentId}:${threadId}`, { query, at: now });
 }
 
 /**
- * Whether a palette pick just sent this thread's open with the same
- * watermark, so the thread view needs no visit of its own. Answers once.
+ * The thread view's open: whether to send it, and the query a palette pick
+ * handed over. A pick is always sent, so the server records it even inside
+ * an open it merges.
  */
-export function takePickedOpen(environmentId: EnvironmentId, threadId: string, visitedAt: string) {
+export function takeThreadOpen(
+  environmentId: EnvironmentId,
+  threadId: string,
+  now: number,
+): { readonly send: boolean; readonly searchQuery?: string } {
   const key = `${environmentId}:${threadId}`;
-  const picked = pickedOpens.get(key);
-  pickedOpens.delete(key);
-  return picked === visitedAt;
+  const pick = pendingPicks.get(key);
+  pendingPicks.delete(key);
+  const searchQuery = pick && now - pick.at < PICK_HANDOFF_MS ? pick.query : undefined;
+  const claimed = claimThreadOpen(environmentId, threadId, now);
+  return searchQuery === undefined ? { send: claimed } : { send: true, searchQuery };
 }
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {

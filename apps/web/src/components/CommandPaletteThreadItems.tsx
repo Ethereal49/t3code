@@ -1,6 +1,7 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
-  claimPickedOpen,
+  claimThreadOpen,
+  handOffPick,
   nextShownOrder,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
@@ -141,22 +142,25 @@ export function useCommandPaletteThreadItems(input: {
       );
     },
     runThread: async (thread) => {
-      // The pick is an open with its query, so the thread view skips its own.
+      // The thread view sends the open with the picked query. The open thread
+      // mounts no view, so its pick is sent here.
       if (
         threadSearchQuery.trim().length > 0 &&
         !threadSearchQuery.startsWith(">") &&
         thread.lastVisitedAt !== undefined
       ) {
-        claimPickedOpen(thread.environmentId, thread.id, Date.now(), thread.updatedAt);
-        void visitThread({
-          environmentId: thread.environmentId,
-          input: {
-            threadId: thread.id,
-            visitedAt: thread.updatedAt,
-            opened: true,
-            searchQuery: pickedQuery(threadSearchQuery),
-          },
-        });
+        const searchQuery = pickedQuery(threadSearchQuery);
+        const isOpen =
+          activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
+        if (isOpen) {
+          claimThreadOpen(thread.environmentId, thread.id, Date.now());
+          void visitThread({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, visitedAt: thread.updatedAt, opened: true, searchQuery },
+          });
+        } else {
+          handOffPick(thread.environmentId, thread.id, searchQuery, Date.now());
+        }
       }
       await navigate({
         to: "/$environmentId/$threadId",

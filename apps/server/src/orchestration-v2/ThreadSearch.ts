@@ -47,6 +47,8 @@ const SearchRequest = Schema.Struct({
   /** Tokens every hit must contain, checked on the text. */
   substrings: TokenList,
   projectId: Schema.NullOr(ProjectId),
+  /** Threads a first read already found, so a second read reaches others. */
+  excludedThreadIds: TokenList,
 });
 const SearchRow = Schema.Struct({
   messageRowid: Schema.Number,
@@ -99,7 +101,7 @@ function buildMessageSearch(
   query: string,
   hasIndex: boolean,
 ):
-  | (Omit<typeof SearchRequest.Type, "projectId"> & {
+  | (Omit<typeof SearchRequest.Type, "projectId" | "excludedThreadIds"> & {
       /** The same tokens after a space, for words a common fragment's newest hits miss. */
       readonly wordMatch: string | null;
     })
@@ -165,7 +167,7 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
 // "café"). Exported so a test can check the query plan.
 export const messageHitsQuery = (
   sql: SqlClient.SqlClient,
-  { match, substrings, projectId }: typeof SearchRequest.Encoded,
+  { match, substrings, projectId, excludedThreadIds }: typeof SearchRequest.Encoded,
 ) => sql`
     WITH eligible AS MATERIALIZED (
       SELECT threads.thread_id, threads.project_id
@@ -176,6 +178,7 @@ export const messageHitsQuery = (
         AND threads.archived_at IS NULL
         AND projects.deleted_at IS NULL
         AND (${projectId} IS NULL OR threads.project_id = ${projectId})
+        AND threads.thread_id NOT IN (SELECT value FROM json_each(${excludedThreadIds}))
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
     )
@@ -344,20 +347,24 @@ export const make = Effect.gen(function* () {
         const messageSearch = buildMessageSearch(input.query, index.length > 0);
         if (messageSearch === null) return;
         const { match, wordMatch, substrings } = messageSearch;
-        const newest = yield* searchRows({ match, substrings, projectId: input.projectId });
+        const projectId = input.projectId;
+        const newest = yield* searchRows({ match, substrings, projectId, excludedThreadIds: [] });
         const words = addRows(newest);
-        // When most of the newest hits sit inside words ("ing"), older words
-        // after a space come from the index instead.
-        if (newest.length < MESSAGE_HIT_LIMIT || wordMatch === null || words * 2 >= newest.length) {
-          return;
-        }
-        const seen = new Set(newest.map((row) => row.messageRowid));
+        if (newest.length < MESSAGE_HIT_LIMIT) return;
+        // A full page can hold few words ("ing" sits mostly inside words) or few
+        // threads (one busy thread's newest messages). Read once more past the
+        // threads that already have a word match: words after a boundary when
+        // the hits sat mostly inside words, else the same query.
+        const mostlyInsideWords = words * 2 < newest.length;
+        if (!mostlyInsideWords && best.size >= (input.limit ?? 50)) return;
+        const found = [...best].flatMap(([threadId, hit]) => (hit.midWord ? [] : [threadId]));
         const older = yield* searchRows({
-          match: wordMatch,
+          match: mostlyInsideWords && wordMatch !== null ? wordMatch : match,
           substrings,
-          projectId: input.projectId,
+          projectId,
+          excludedThreadIds: found,
         });
-        addRows(older.filter((row) => !seen.has(row.messageRowid)));
+        addRows(older);
       }),
     );
     const ranked = [...best.values()].sort(

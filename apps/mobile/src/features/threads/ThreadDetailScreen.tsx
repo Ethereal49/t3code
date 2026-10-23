@@ -131,7 +131,7 @@ import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { claimThreadOpen, takePickedOpen } from "@t3tools/client-runtime/state/thread-search";
+import { takeThreadOpen } from "@t3tools/client-runtime/state/thread-search";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
   clearThreadComposerError,
@@ -405,22 +405,25 @@ function ThreadVisitWatermark(props: {
   const wakeIsLatestUpdate = selectedThreadUpdatedAt === selectedThreadWokeAt;
   const selectedThreadLastVisitedAt = thread.lastVisitedAt;
   const selectedThreadCompletedAt = thread.latestRun?.completedAt;
-  // Opening a thread is one visit that also counts toward search ranking; the
-  // watermark effect below then skips it.
+  // Opening a thread is one visit that also counts toward search ranking, with
+  // the query when the palette picked it; the watermark effect below skips it.
   const recordedOpenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!showContent || selectedThreadLastVisitedAt === undefined) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
-    // A palette pick already sent this open with the same watermark.
-    const picked = takePickedOpen(props.environmentId, selectedThreadId, selectedThreadUpdatedAt);
-    if (!picked && !claimThreadOpen(props.environmentId, selectedThreadId, Date.now())) return;
+    const open = takeThreadOpen(props.environmentId, selectedThreadId, Date.now());
+    if (!open.send) return;
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
-    if (picked) return;
     void visitThread({
       environmentId: props.environmentId,
-      input: { threadId: selectedThreadId, visitedAt: selectedThreadUpdatedAt, opened: true },
+      input: {
+        threadId: selectedThreadId,
+        visitedAt: selectedThreadUpdatedAt,
+        opened: true,
+        ...(open.searchQuery === undefined ? {} : { searchQuery: open.searchQuery }),
+      },
     });
   }, [
     props.environmentId,

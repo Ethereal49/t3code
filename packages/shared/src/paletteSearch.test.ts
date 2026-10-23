@@ -272,7 +272,10 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
 
   it("stores picked queries without splitting an emoji", () => {
     expect(pickedQuery(`${"a".repeat(31)}🚀`)).toBe("a".repeat(31));
-    expect(pickedQuery("  Upl ")).toBe("Upl");
+    expect(pickedQuery("  Upl ")).toBe("upl");
+    // Folded before it is cut, as stored and as compared.
+    const spaced = "investigate    workspace thread reset bug";
+    expect(pickedQuery(spaced)).toBe(pickedQuery(foldSearchQuery(spaced)));
   });
 
   it("matches emoji in titles", () => {
@@ -590,6 +593,9 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("Properties: tie\u0301ng support", "tie")).toMatchObject({
       offset: 12,
     });
+    // Text with a decomposed accent anywhere is folded to its end too.
+    const decomposed = `e\u0301 ${"plain ".repeat(4000)}Résumé indexing`;
+    expect(scoreMessageMatch(decomposed, "res")).toMatchObject({ offset: 24_003 });
     // A letter that grows when lowercased does not shift later offsets.
     expect(scoreMessageMatch("İ Enable fts and model", "fts")).toMatchObject({ offset: 9 });
     expect(scoreMessageMatch("İ Enable fts and model", "model")?.midWord).toBe(false);

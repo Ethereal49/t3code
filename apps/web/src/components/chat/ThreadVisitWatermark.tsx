@@ -1,7 +1,7 @@
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { claimThreadOpen, takePickedOpen } from "@t3tools/client-runtime/state/thread-search";
+import { takeThreadOpen } from "@t3tools/client-runtime/state/thread-search";
 import { useEffect, useRef } from "react";
 import { useUiStateStore } from "../../uiStateStore";
 import { threadEnvironment } from "../../state/threads";
@@ -28,27 +28,25 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
   const lastVisitDispatchAtRef = useRef(0);
   const recordedOpenRef = useRef<string | null>(null);
 
-  // Opening a thread is one visit that also counts toward search ranking. It
-  // runs before the watermark effect, which then sees this watermark as sent.
+  // Opening a thread is one visit that also counts toward search ranking, with
+  // the query when the palette picked it. It runs before the watermark effect,
+  // which then sees this watermark as sent.
   useEffect(() => {
     if (!serverThread?.id || serverThread.lastVisitedAt === undefined) return;
     if (recordedOpenRef.current === threadKey) return;
     recordedOpenRef.current = threadKey;
-    // A palette pick already sent this open with the same watermark.
-    const picked = takePickedOpen(
-      serverThread.environmentId,
-      serverThread.id,
-      serverThread.updatedAt,
-    );
-    if (!picked && !claimThreadOpen(serverThread.environmentId, serverThread.id, Date.now())) {
-      return;
-    }
+    const open = takeThreadOpen(serverThread.environmentId, serverThread.id, Date.now());
+    if (!open.send) return;
     lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
     lastVisitDispatchAtRef.current = Date.now();
-    if (picked) return;
     void visitThreadMutation({
       environmentId: serverThread.environmentId,
-      input: { threadId: serverThread.id, visitedAt: serverThread.updatedAt, opened: true },
+      input: {
+        threadId: serverThread.id,
+        visitedAt: serverThread.updatedAt,
+        opened: true,
+        ...(open.searchQuery === undefined ? {} : { searchQuery: open.searchQuery }),
+      },
     });
   }, [
     threadKey,
