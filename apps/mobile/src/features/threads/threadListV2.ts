@@ -14,7 +14,7 @@ import {
   threadSearchMatchKey,
   threadSearchSubject,
 } from "@t3tools/client-runtime/state/thread-search";
-import { foldSearchQuery, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
+import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import {
   createInboxReturnTracker,
   isThreadWorking,
@@ -619,16 +619,24 @@ export function buildThreadListV2Items(input: {
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
+  // The same matches as the command palette, typo fallback included; the list keeps its order.
+  const matchingThreads =
+    query.length > 0
+      ? new Set(
+          rankSearchItems(input.threads, (thread, options) =>
+            scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, options),
+          ).map(({ item }) => item),
+        )
+      : null;
   for (const thread of input.threads) {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }
-    // The same word-aware match as the command palette; the list keeps its own order.
     if (
-      query.length > 0 &&
-      scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs) === null &&
+      matchingThreads !== null &&
+      !matchingThreads.has(thread) &&
       input.matchedThreadKeys?.has(
         threadSearchMatchKey({
           environmentId: thread.environmentId,

@@ -40,6 +40,15 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   }
 }
 
+const WordStart = Schema.Struct({
+  /** The plain token, checked against the lowercased text. */
+  word: Schema.String,
+  /** The token as a capital after a lowercase letter ("enableFTS"). */
+  camel: Schema.String,
+  /** Accent-insensitive patterns, for hits the index matched through accents. */
+  accented: Schema.Array(Schema.String),
+});
+
 // Token lists bind as JSON arrays, so any number of them is one parameter.
 const TokenList = Schema.fromJsonString(Schema.Array(Schema.String));
 const SearchRequest = Schema.Struct({
@@ -47,8 +56,8 @@ const SearchRequest = Schema.Struct({
   match: Schema.NullOr(Schema.String),
   /** Tokens every hit must contain, checked on the text. */
   substrings: TokenList,
-  /** GLOB-escaped tokens that must start a word in the hit. */
-  wordStarts: TokenList,
+  /** Short tokens that must start a word in the hit. */
+  wordStarts: Schema.fromJsonString(Schema.Array(WordStart)),
   projectId: Schema.NullOr(ProjectId),
   limit: Schema.Int,
 });
@@ -63,8 +72,45 @@ const SearchRow = Schema.Struct({
 const SNIPPET_LENGTH = 240;
 const MESSAGE_HIT_LIMIT = 5000;
 
-function escapeGlob(token: string): string {
-  return token.replace(/[[*?]/g, (character) => `[${character}]`);
+// Latin letters with their accented forms. SQLite's GLOB is case-sensitive
+// and knows no accents, so each letter becomes a class of every form.
+const LETTER_FORMS: Readonly<Record<string, string>> = {
+  a: "aàáâãäåāăą",
+  c: "cçćĉċč",
+  e: "eèéêëēĕėęě",
+  i: "iìíîïĩīĭįı",
+  n: "nñńņň",
+  o: "oòóôõöøōŏő",
+  s: "sśŝşš",
+  u: "uùúûüũūŭůűų",
+  y: "yýÿŷ",
+  z: "zźżž",
+};
+const WORD_CHARACTERS = `a-zA-Z0-9${Object.values(LETTER_FORMS).join("")}${Object.values(
+  LETTER_FORMS,
+)
+  .join("")
+  .toUpperCase()}`;
+
+function letterClass(letter: string): string {
+  const forms = LETTER_FORMS[letter] ?? letter;
+  return `[${forms}${forms.toUpperCase()}]`;
+}
+
+/**
+ * How the server checks that a short ASCII `token` starts a word in a hit.
+ * Most hits contain the token as typed, so cheap lowercase patterns come first;
+ * the accent-aware ones, slow on long text, only run when it does not appear
+ * as typed ("res" in "Résumé").
+ */
+function wordStart(token: string): typeof WordStart.Type {
+  const caseless = (letter: string) => `[${letter}${letter.toUpperCase()}]`;
+  const accentedWord = `${Array.from(token, letterClass).join("")}*`;
+  return {
+    word: token,
+    camel: `*[a-z]${token[0]!.toUpperCase()}${Array.from(token.slice(1), caseless).join("")}*`,
+    accented: [accentedWord, `*[^${WORD_CHARACTERS}]${accentedWord}`],
+  };
 }
 
 /**
@@ -84,7 +130,7 @@ function buildMessageSearch(
   return {
     match: indexed ? long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ") : null,
     substrings: indexed ? short : [...long, ...short],
-    wordStarts: [...long, ...short].filter(messageTokenNeedsWordStart).map(escapeGlob),
+    wordStarts: [...long, ...short].filter(messageTokenNeedsWordStart).map(wordStart),
   };
 }
 
@@ -210,9 +256,22 @@ export const make = Effect.gen(function* () {
           AND NOT EXISTS (
             SELECT 1 FROM json_each(${wordStarts}) AS token
             WHERE NOT (
-              lower(json_extract(messages.payload_json, '$.text')) GLOB token.value || '*'
-              OR lower(json_extract(messages.payload_json, '$.text'))
-                GLOB '*[^a-z0-9]' || token.value || '*'
+              CASE
+                WHEN instr(
+                  lower(json_extract(messages.payload_json, '$.text')),
+                  json_extract(token.value, '$.word')
+                ) > 0
+                THEN lower(json_extract(messages.payload_json, '$.text'))
+                    GLOB json_extract(token.value, '$.word') || '*'
+                  OR lower(json_extract(messages.payload_json, '$.text'))
+                    GLOB '*[^a-z0-9]' || json_extract(token.value, '$.word') || '*'
+                  OR json_extract(messages.payload_json, '$.text')
+                    GLOB json_extract(token.value, '$.camel')
+                ELSE EXISTS (
+                  SELECT 1 FROM json_each(token.value, '$.accented') AS pattern
+                  WHERE json_extract(messages.payload_json, '$.text') GLOB pattern.value
+                )
+              END
             )
           )
         -- Newest hits first, and only so many: a very common word stops early

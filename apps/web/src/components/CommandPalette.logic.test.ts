@@ -274,6 +274,34 @@ describe("buildThreadActionItems", () => {
 
     expect(labels("upgrade")).toEqual(["Threads"]);
     expect(labels("upl")).toEqual(["Actions"]);
+    // A short query still finds a command by a keyword it equals.
+    const prGroups = filterCommandPaletteGroups({
+      activeGroups: [
+        {
+          value: "actions",
+          label: "Actions",
+          items: [
+            {
+              kind: "action",
+              value: "action:open-prs",
+              searchTerms: ["Open pull requests", "pr", "prs", "review"],
+              title: "Open pull requests",
+              icon: null,
+              run: async () => undefined,
+            },
+            action("action:project", "Project settings"),
+          ],
+        },
+      ],
+      query: "pr",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    });
+    expect(prGroups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
+      "action:open-prs",
+      "action:project",
+    ]);
     expect(labels("up")).toEqual(["Actions", "Threads"]);
     expect(labels("pnpm up")).toEqual(["Threads"]);
   });

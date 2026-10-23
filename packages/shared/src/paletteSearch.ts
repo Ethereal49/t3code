@@ -250,6 +250,8 @@ function matchInitials(field: SearchField, token: string): TokenMatch | null {
 interface WeightedSearchField {
   readonly value: string;
   readonly weight: number;
+  /** Only a whole-word match counts, as for a short query against keywords. */
+  readonly wholeWords?: boolean;
 }
 
 interface SearchFieldsMatch {
@@ -292,7 +294,11 @@ function matchSearchFields(
   if (normalizedQuery.length === 0) return null;
   const prepared = fields
     .filter((field) => field.value.length > 0)
-    .map((field) => ({ field: prepareSearchField(field.value), weight: field.weight }));
+    .map((field) => ({
+      field: prepareSearchField(field.value),
+      weight: field.weight,
+      wholeWords: field.wholeWords ?? false,
+    }));
   const primary = fields[0]?.value ? prepared[0]?.field : undefined;
   const tokens = normalizedQuery.split(" ");
   const primaryRanges: SearchRange[] = [];
@@ -302,12 +308,12 @@ function matchSearchFields(
     let best = 0;
     let bestPrimary: TokenMatch | null = null;
     let atWordStart = false;
-    for (const { field, weight } of prepared) {
+    for (const { field, weight, wholeWords } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
       const typos = options?.typos ?? false;
       // Initials only count in the name.
       const match = matchToken(field, token, typos, typos && field === primary);
-      if (match === null) continue;
+      if (match === null || (wholeWords && match.score < WHOLE_WORD)) continue;
       if (field === primary) bestPrimary = match;
       if (match.score >= 0.7) atWordStart = true;
       if (match.score * weight > best) best = match.score * weight;
@@ -361,7 +367,7 @@ export function messageSearchTokens(query: string): {
 /**
  * Whether a message token must start a word. Short tokens match inside too
  * many words ("fts" in "drafts"). Only plain ASCII tokens are checked: the
- * server's check is SQLite GLOB, which only knows ASCII letters.
+ * server checks with SQLite GLOB patterns built from them.
  */
 export function messageTokenNeedsWordStart(token: string): boolean {
   return token.length < 4 && /^[a-z0-9]+$/.test(token);
@@ -696,23 +702,31 @@ export interface SearchTermsMatch {
   readonly ranges: ReadonlyArray<SearchRange>;
 }
 
-// Below this, keywords match too much: "co" or "pro" would list most settings.
+// Below this, keyword prefixes match too much: "co" or "pro" would list most
+// settings. A short query still matches a keyword it equals ("pr").
 const KEYWORD_QUERY_MIN_LENGTH = 4;
 
 /**
  * Scores a non-thread result such as a command or project. The first term
- * names it; the others are keywords that help it match but count less, and
- * only for queries of four or more characters.
+ * names it; the others are keywords that help it match but count less. For
+ * queries under four characters a keyword must match a whole word.
  */
 export function scoreSearchTerms(
   normalizedQuery: string,
   terms: ReadonlyArray<string>,
   options?: { readonly typos?: boolean },
 ): SearchTermsMatch | null {
-  const fields = normalizedQuery.length < KEYWORD_QUERY_MIN_LENGTH ? terms.slice(0, 1) : terms;
+  const short = normalizedQuery.length < KEYWORD_QUERY_MIN_LENGTH;
   const match = matchSearchFields(
     normalizedQuery,
-    fields.map((value, index) => ({ value, weight: index === 0 ? 1 : 0.6 })),
+    terms.map((value, index) =>
+      index === 0
+        ? { value, weight: 1 }
+        : // An alias typed in full ("pr") is a deliberate name, above a mere title prefix.
+          short
+          ? { value, weight: 0.8, wholeWords: true }
+          : { value, weight: 0.6 },
+    ),
     options,
   );
   return (

@@ -314,6 +314,8 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
             message(threadId, "fts", "assistant", "the FTS index is ready"),
             thread(drafts, project),
             message(drafts, "drafts", "assistant", "saved two drafts and shifts"),
+            message(threadId, "camel", "assistant", "Configure enableFTS today"),
+            message(threadId, "accented", "user", "Review Résumé indexing"),
           ],
           projections.apply,
           { discard: true },
@@ -323,7 +325,8 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
             .search({ query })
             .pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
 
-        for (const query of ["검색 기능", "がんばって", "部署", "fts"]) {
+        // Short words must start a word, which camelCase and accented words do.
+        for (const query of ["검색 기능", "がんばって", "部署", "fts", "res", "enable"]) {
           assert.deepEqual(yield* threadIds(query), [threadId], query);
         }
         // Without the index (an SQLite build without FTS5 trigrams) search scans instead.
