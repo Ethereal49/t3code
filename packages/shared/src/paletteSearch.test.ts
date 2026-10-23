@@ -72,7 +72,7 @@ describe("scoreThreadSearch", () => {
   it("puts the thread picked for a query first when that query is typed again", () => {
     const threads = [
       thread("Release checklist", {
-        opens: { openedAt: NOW - 5 * DAY, score: 1, queries: ["rel"] },
+        opens: { openedAt: NOW - 5 * DAY, pickedAt: NOW - 5 * DAY, score: 1, queries: ["rel"] },
       }),
       thread("Relay pairing", { activityAt: NOW }),
     ];
@@ -83,7 +83,7 @@ describe("scoreThreadSearch", () => {
     // An old pick fades with the thread's last open.
     const stale = [
       thread("Release checklist", {
-        opens: { openedAt: NOW - 90 * DAY, score: 1, queries: ["rel"] },
+        opens: { openedAt: NOW - 90 * DAY, pickedAt: NOW - 90 * DAY, score: 1, queries: ["rel"] },
       }),
       thread("Relay pairing", { activityAt: NOW }),
     ];
@@ -98,6 +98,16 @@ describe("scoreThreadSearch", () => {
       }),
     ];
     expect(rankTitles("rel", reopened)).toEqual(["Relay pairing", "Release checklist"]);
+    // The latest pick for a query wins over an earlier one with a better title match.
+    const repicked = [
+      thread("Deploy", {
+        opens: { openedAt: NOW - DAY, pickedAt: NOW - DAY, score: 1, queries: ["deploy"] },
+      }),
+      thread("Deploy timeout on Railway", {
+        opens: { openedAt: NOW, pickedAt: NOW, score: 1, queries: ["deploy"] },
+      }),
+    ];
+    expect(rankTitles("deploy", repicked)).toEqual(["Deploy timeout on Railway", "Deploy"]);
   });
 
   it("matches pull request numbers, branches, and projects with every token somewhere", () => {
@@ -202,7 +212,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
 
   it("lists a thread picked for a query even when only its messages matched", () => {
     const picked = thread("Hosting alternatives", {
-      opens: { openedAt: NOW - DAY, score: 1, queries: ["tigris"] },
+      opens: { openedAt: NOW - DAY, pickedAt: NOW - DAY, score: 1, queries: ["tigris"] },
     });
     expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
     expect(rankTitles("ti", [picked])).toEqual([]);
@@ -280,7 +290,12 @@ describe("rankMessageMatches", () => {
     const subjects = new Map([
       ...Array.from({ length: 50 }, (_, index) => [`a${index}`, thread(`A ${index}`)] as const),
       ["b0", thread("B recent", { activityAt: NOW })],
-      ["b1", thread("B picked", { opens: { openedAt: NOW, score: 1, queries: ["needle"] } })],
+      [
+        "b1",
+        thread("B picked", {
+          opens: { openedAt: NOW, pickedAt: NOW, score: 1, queries: ["needle"] },
+        }),
+      ],
     ]);
     const matches = [
       ...Array.from({ length: 50 }, (_, rank) => ({ key: `a${rank}`, rank })),
@@ -369,6 +384,10 @@ describe("rankSearchGroups with keywords and picks", () => {
     // A command named for the query stays first, unless the thread was picked for it.
     expect(rank(["Reload MCP servers"], named)).toEqual(["actions", "threads"]);
     expect(rank(["Reload MCP servers"], picked)).toEqual(["threads", "actions"]);
+    const oldPick = thread("Trim MCP model lists", {
+      opens: { openedAt: NOW, pickedAt: NOW - 60 * DAY, score: 1, queries: ["mcp"] },
+    });
+    expect(rank(["Reload MCP servers"], oldPick)).toEqual(["actions", "threads"]);
   });
 });
 
@@ -418,6 +437,10 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
     expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
     expect(scoreMessageMatch("v12rc build", "rc")?.quality).toBe(1);
+    // Words too short for the index must start a word too.
+    expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
+    expect(scoreMessageMatch("Upgrade pnpm 512 today", "pnpm 12")).toBeNull();
+    expect(scoreMessageMatch("Upgrade to pnpm12 today", "pnpm 12")?.quality).toBe(1);
   });
 
   it("finds words through case and accents, also after the same letters inside a word", () => {
@@ -426,6 +449,10 @@ describe("scoreMessageMatch", () => {
       offset: 15,
     });
     expect(scoreMessageMatch("Le CAFÉ ouvert", "cafe")).toEqual({ quality: 1, offset: 3 });
+    expect(scoreMessageMatch("I presume this. Résumé indexing", "resume")).toEqual({
+      quality: 1,
+      offset: 16,
+    });
     expect(scoreMessageMatch("明天部署到生产环境", "部署")).toEqual({ quality: 1, offset: 2 });
   });
 });

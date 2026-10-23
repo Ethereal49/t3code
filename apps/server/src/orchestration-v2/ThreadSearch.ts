@@ -49,6 +49,7 @@ const SearchRequest = Schema.Struct({
   projectId: Schema.NullOr(ProjectId),
 });
 const SearchRow = Schema.Struct({
+  messageRowid: Schema.Number,
   threadId: ThreadId,
   projectId: ProjectId,
   source: OrchestrationThreadSearchSource,
@@ -58,8 +59,8 @@ const SearchRow = Schema.Struct({
 });
 
 const SNIPPET_LENGTH = 240;
-// The newest hits checked per query. A common word stops here instead of
-// reading every message, so time stays flat as history grows.
+// The newest hits read per query. A common word stops here instead of reading
+// every message, so time stays flat as history grows.
 const MESSAGE_HIT_LIMIT = 2000;
 
 /**
@@ -71,13 +72,21 @@ const MESSAGE_HIT_LIMIT = 2000;
 function buildMessageSearch(
   query: string,
   hasIndex: boolean,
-): Omit<typeof SearchRequest.Type, "projectId"> | null {
+):
+  | (Omit<typeof SearchRequest.Type, "projectId"> & {
+      /** The same tokens after a space, for words a common fragment's newest hits miss. */
+      readonly wordMatch: string | null;
+    })
+  | null {
   const { long, short } = messageSearchTokens(query);
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
   const indexed = hasIndex && long.every((token) => Array.from(token).length >= 3);
+  const phrases = (prefix: string) =>
+    long.map((token) => `"${prefix}${token.replaceAll('"', '""')}"`).join(" ");
   return {
-    match: indexed ? long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ") : null,
+    match: indexed ? phrases("") : null,
+    wordMatch: indexed ? phrases(" ") : null,
     substrings: indexed ? short : [...long, ...short],
   };
 }
@@ -170,6 +179,7 @@ export const make = Effect.gen(function* () {
         match === null
           ? sql`
             SELECT
+              messages.rowid AS "messageRowid",
               messages.thread_id AS "threadId",
               eligible.project_id AS "projectId",
               messages.role AS source,
@@ -182,6 +192,7 @@ export const make = Effect.gen(function* () {
           `
           : sql`
             SELECT
+              orchestration_v2_message_search.rowid AS "messageRowid",
               messages.thread_id AS "threadId",
               eligible.project_id AS "projectId",
               messages.role AS source,
@@ -199,7 +210,9 @@ export const make = Effect.gen(function* () {
           SELECT 1 FROM json_each(${substrings}) AS token
           WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
         )
-      ORDER BY messages.rowid DESC
+      -- The index's own rowid, so FTS5 returns hits newest first and stops at
+      -- the limit; ordering by the messages table's rowid sorts every hit.
+      ORDER BY "messageRowid" DESC
       LIMIT ${MESSAGE_HIT_LIMIT}
     `,
   });
@@ -247,32 +260,52 @@ export const make = Effect.gen(function* () {
   const searchMessages = Effect.fn("ThreadSearch.searchMessages")(function* (
     input: OrchestrationSearchThreadsInput & { readonly projectId: ProjectId | null },
   ) {
-    const rows = yield* read(
-      Effect.gen(function* () {
-        const index = yield* sql`
-          SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
-        `;
-        const messageSearch = buildMessageSearch(input.query, index.length > 0);
-        if (messageSearch === null) return [];
-        return yield* searchRows({ ...messageSearch, projectId: input.projectId });
-      }),
-    );
     // One message per thread: one where every word starts a word, then what the
     // user wrote, since that is what they remember asking, then the best text
     // match. Rows arrive newest first, so ties keep the newest.
-    type Hit = { readonly row: (typeof rows)[number]; readonly quality: number };
+    type Hit = { readonly row: typeof SearchRow.Type; readonly quality: number };
     const compareHits = (left: Hit, right: Hit) =>
       right.quality - left.quality ||
       Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
       left.row.score - right.row.score;
     const best = new Map<ThreadId, Hit>();
-    for (const row of rows) {
-      const match = scoreMessageMatch(row.text, input.query);
-      if (match === null) continue;
-      const hit = { row, quality: match.quality };
-      const current = best.get(row.threadId);
-      if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
-    }
+    // Returns how many rows matched as words.
+    const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
+      let words = 0;
+      for (const row of rows) {
+        const match = scoreMessageMatch(row.text, input.query);
+        if (match === null) continue;
+        if (match.quality === 1) words++;
+        const hit = { row, quality: match.quality };
+        const current = best.get(row.threadId);
+        if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
+      }
+      return words;
+    };
+    yield* read(
+      Effect.gen(function* () {
+        const index = yield* sql`
+          SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
+        `;
+        const messageSearch = buildMessageSearch(input.query, index.length > 0);
+        if (messageSearch === null) return;
+        const { match, wordMatch, substrings } = messageSearch;
+        const newest = yield* searchRows({ match, substrings, projectId: input.projectId });
+        const words = addRows(newest);
+        // When most of the newest hits sit inside words ("ing"), older words
+        // after a space come from the index instead.
+        if (newest.length < MESSAGE_HIT_LIMIT || wordMatch === null || words * 2 >= newest.length) {
+          return;
+        }
+        const seen = new Set(newest.map((row) => row.messageRowid));
+        const older = yield* searchRows({
+          match: wordMatch,
+          substrings,
+          projectId: input.projectId,
+        });
+        addRows(older.filter((row) => !seen.has(row.messageRowid)));
+      }),
+    );
     const ranked = [...best.values()].sort(
       (left, right) => right.quality - left.quality || left.row.score - right.row.score,
     );

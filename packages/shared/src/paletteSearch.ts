@@ -461,9 +461,17 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
   let folded: SearchField | null = null;
   let quality = 1;
   let offset = -1;
-  for (const token of messageSearchTokens(query).long) {
+  const { long, short: tooShort } = messageSearchTokens(query);
+  // Too short for the index, so the caller only checked them as substrings:
+  // "on" must start a word, not sit inside "connection".
+  for (const token of tooShort) {
+    let index = lowerText.indexOf(token);
+    while (index !== -1 && !startsWordAt(text, index)) index = lowerText.indexOf(token, index + 1);
+    if (index === -1) return null;
+  }
+  for (const token of long) {
     const short = Array.from(token).length < MESSAGE_WORD_START_LENGTH;
-    const accents = short ? accentedFormsOf(token) : null;
+    const accents = accentedFormsOf(token);
     let first = -1;
     let wordStart = -1;
     for (
@@ -661,19 +669,25 @@ function matchReference(
     : null;
 }
 
-// Strong enough that a thread you just picked for this query wins over a better
-// but unused match. It fades from the last pick, so old picks let go even if
-// the thread is opened in other ways.
-const PICK_BOOST = 3;
+// How long a pick lasts. While it does, typing the query again (or the start of
+// it) puts the thread first, the latest pick first, and lifts its group above
+// commands that match as well. It runs from the pick, so an old pick lets go
+// even if the thread is opened in other ways.
+const PICK_WINDOW_MS = 21 * DAY_MS;
 // A remembered pick alone lists its thread (one picked through a message
 // match, say), but two letters are too little to go on.
 const PICK_ONLY_MIN_LENGTH = 3;
 
-function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: number): number {
-  const { opens } = thread;
-  return opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
-    ? PICK_BOOST * decay(now - (opens.pickedAt ?? opens.openedAt))
-    : 0;
+function activePickAt(
+  thread: ThreadSearchSubject,
+  normalizedQuery: string,
+  now: number,
+): number | undefined {
+  const pickedAt = thread.opens?.pickedAt;
+  if (pickedAt === undefined || now - pickedAt > PICK_WINDOW_MS) return undefined;
+  return thread.opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
+    ? pickedAt
+    : undefined;
 }
 
 export interface ThreadSearchMatch {
@@ -686,8 +700,8 @@ export interface ThreadSearchMatch {
   readonly titleRanges: ReadonlyArray<SearchRange>;
   /** Why the thread matched when its title shows no match, for the result row. */
   readonly hint?: SearchMatchHint;
-  /** Picked before for this query; see `rankSearchGroups`. */
-  readonly picked?: boolean;
+  /** When the thread was picked for this query, while that pick lasts; see `rankSearchGroups`. */
+  readonly pickedAt?: number;
 }
 
 export interface SearchMatchHint {
@@ -787,12 +801,15 @@ export function scoreThreadSearch(
   if (thread.branch) fields.push({ value: thread.branch, weight: 0.6 });
   if (thread.projectTitle) fields.push({ value: thread.projectTitle, weight: 0.45 });
   if (thread.environmentLabel) fields.push({ value: thread.environmentLabel, weight: 0.45 });
-  const boost = pickBoost(thread, normalizedQuery, now);
+  const pickedAt = activePickAt(thread, normalizedQuery, now);
   const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#/, "");
   const fieldMatch = matchSearchFields(fieldQuery, fields, options);
   const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
   const pickOnly =
-    !fieldMatch && !referenceMatch && boost > 0 && normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
+    !fieldMatch &&
+    !referenceMatch &&
+    pickedAt !== undefined &&
+    normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
   const match =
     fieldMatch ??
     referenceMatch ??
@@ -807,12 +824,12 @@ export function scoreThreadSearch(
           ? { label: "Picked before for", text: normalizedQuery, ranges: [] }
           : matchHint(fieldQuery, thread, options?.typos ?? false);
   return {
-    score: match.quality * (threadUsageBoost(thread, now) + boost),
+    score: match.quality * threadUsageBoost(thread, now),
     quality: match.quality,
     strong: match.strong,
     titleRanges: match.primaryRanges,
     ...(hint ? { hint } : {}),
-    ...(boost > 0 ? { picked: true } : {}),
+    ...(pickedAt === undefined ? {} : { pickedAt }),
   };
 }
 
@@ -822,9 +839,9 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
 }
 
 /**
- * Orders message matches from the server: matches where every query word
- * starts a word first, as for titles, then by the same use and pick signals
- * as title matches. `rank` is the match's position in its own environment's
+ * Orders message matches from the server like title matches: matches where
+ * every query word starts a word first, then threads picked for the query,
+ * then by use. `rank` is the match's position in its own environment's
  * results, which stand in for text relevance, so environments merge fairly.
  */
 export function rankMessageMatches<
@@ -839,12 +856,18 @@ export function rankMessageMatches<
     .flatMap((match) => {
       const subject = subjectOf(match);
       if (!subject) return [];
-      const use = threadUsageBoost(subject, now) + pickBoost(subject, normalizedQuery, now);
-      return [{ match, score: use / (1 + 0.15 * match.rank) }];
+      return [
+        {
+          match,
+          pickedAt: activePickAt(subject, normalizedQuery, now) ?? 0,
+          score: threadUsageBoost(subject, now) / (1 + 0.15 * match.rank),
+        },
+      ];
     })
     .sort(
       (left, right) =>
         Number(left.match.midWord === true) - Number(right.match.midWord === true) ||
+        right.pickedAt - left.pickedAt ||
         right.score - left.score,
     )
     .map(({ match }) => match);
@@ -871,11 +894,11 @@ export interface RankedSearchItem<T, M> {
 }
 
 /**
- * Ranks grouped items, best score first within each group. Groups with no
- * match are dropped. The rest order by the class of their best match (word
- * starts in a name, typos in a name or keyword matches, or weaker), one class
- * higher for a result picked before for the query, and ties keep the given
- * order. Classes
+ * Ranks grouped items: within a group, results picked for the query first
+ * (latest pick first), then best score. Groups with no match are dropped. The
+ * rest order by the class of their best match (word starts in a name, typos in
+ * a name or keyword matches, or weaker), one class higher for a picked
+ * result, and ties keep the given order. Classes
  * rather than scores keep the group order steady while a word is typed, and
  * keep use, which only counts for threads, from outweighing a command that
  * matches as well.
@@ -892,7 +915,7 @@ export function rankSearchGroups<
     readonly score: number;
     readonly quality: number;
     readonly strong: boolean;
-    readonly picked?: boolean;
+    readonly pickedAt?: number;
   },
 >(
   groups: ReadonlyArray<{ readonly group: G; readonly items: ReadonlyArray<T> }>,
@@ -913,9 +936,15 @@ export function rankSearchGroups<
   return ranked
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];
-      const sorted = [...items].sort((left, right) => right.match.score - left.match.score);
+      const sorted = [...items].sort(
+        (left, right) =>
+          (right.match.pickedAt ?? 0) - (left.match.pickedAt ?? 0) ||
+          right.match.score - left.match.score,
+      );
       const best = Math.max(
-        ...items.map(({ match }) => matchClass(match.quality) + (match.picked ? 1 : 0)),
+        ...items.map(
+          ({ match }) => matchClass(match.quality) + (match.pickedAt === undefined ? 0 : 1),
+        ),
       );
       return [{ group, ranked: sorted, best, order }];
     })
