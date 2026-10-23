@@ -261,7 +261,14 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(() => inactive));
     const { projection } = snapshot;
-    if (projection.thread.guestShare?.id !== share.id) return yield* inactive;
+    // The thread can change between authorize and this read; the live tail starts after it.
+    if (
+      projection.thread.guestShare?.id !== share.id ||
+      projection.thread.archivedAt !== null ||
+      projection.thread.deletedAt !== null
+    ) {
+      return yield* inactive;
+    }
 
     const runStatuses = new Map<RunId, OrchestrationV2Run["status"]>();
     for (const run of projection.runs) {

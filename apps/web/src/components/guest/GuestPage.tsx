@@ -77,8 +77,9 @@ const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
 
 export function GuestPage() {
   const [credential] = useState(takeInviteCredential);
-  // Joining sets the session cookie, so the stream has to be opened again with a fresh session.
-  const [session, setSession] = useState(0);
+  // An invite always starts at the name form: a cookie from an earlier share on this host must
+  // not stand in for the thread this link points at.
+  const [joined, setJoined] = useState(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -88,22 +89,16 @@ export function GuestPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-black text-white">
-      <GuestSession
-        key={session}
-        credential={credential}
-        onJoined={() => setSession((current) => current + 1)}
-      />
+      {credential !== null && !joined ? (
+        <NameForm credential={credential} onJoined={() => setJoined(true)} />
+      ) : (
+        <GuestSession />
+      )}
     </div>
   );
 }
 
-function GuestSession({
-  credential,
-  onJoined,
-}: {
-  readonly credential: string | null;
-  readonly onJoined: () => void;
-}) {
+function GuestSession() {
   const [stream, dispatch] = useReducer(applyGuestStreamEvent, initialGuestStreamState);
   // EventSource closes for good only on a non-200 response, which the guest routes send for a
   // missing, invalid, or ended session. Network drops reconnect on their own.
@@ -132,8 +127,7 @@ function GuestSession({
   }
   if (stream.view !== null) return <GuestThread view={stream.view} items={stream.items} />;
   if (!rejected) return <Notice text="Connecting..." />;
-  if (credential === null) return <Notice text="This link has ended or is not valid." />;
-  return <NameForm credential={credential} onJoined={onJoined} />;
+  return <Notice text="This link has ended or is not valid." />;
 }
 
 function Notice({ text }: { readonly text: string }) {
@@ -291,7 +285,8 @@ function GuestComposer() {
     const failure = await postGuest("messages", { text: trimmed });
     setSending(false);
     setError(failure);
-    if (failure === null) setText("");
+    // Keep anything typed while the request was in flight.
+    if (failure === null) setText((current) => (current.trim() === trimmed ? "" : current));
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
