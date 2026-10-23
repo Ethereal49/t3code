@@ -107,7 +107,11 @@ const message = (
   id: string,
   role: "user" | "assistant" | "system",
   text: string,
-  options: { readonly minute?: number; readonly streaming?: boolean } = {},
+  options: {
+    readonly minute?: number;
+    readonly streaming?: boolean;
+    readonly createdBy?: "user" | "agent";
+  } = {},
 ): OrchestrationV2DomainEvent => ({
   id: EventId.make(`message:${id}`),
   type: "message.updated",
@@ -115,7 +119,7 @@ const message = (
   providerInstanceId,
   occurredAt: at(options.minute ?? 1),
   payload: {
-    createdBy: role === "user" ? "user" : "agent",
+    createdBy: options.createdBy ?? (role === "user" ? "user" : "agent"),
     creationSource: role === "user" ? "web" : "provider",
     id: MessageId.make(id),
     threadId,
@@ -271,6 +275,10 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
             message(older, `older-${index}`, "assistant", "pnpm 11 pnpm"),
           ),
           message(parent, "parent-needle", "user", "a needle in a long haystack of other words"),
+          // Agent-written notices in user messages are not indexed, so they never read as "You".
+          message(older, "older-notice", "user", "needle update from a watched pull request", {
+            createdBy: "agent",
+          }),
           message(parent, "parent-pnpm", "user", "moved the repo to pnpm 12 today"),
         ],
         projections.apply,
@@ -310,7 +318,19 @@ it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
         { discard: true },
       );
 
-      const result = yield* search.searchThreads({ query: "auth", projectId: project });
+      // Stronger message hits in another project must not use up this project's limit.
+      yield* Effect.forEach(
+        Array.from({ length: 55 }, (_, index) => {
+          const busy = ThreadId.make(`thread:elsewhere-${index}`);
+          return [
+            thread(busy, otherProject),
+            message(busy, `elsewhere-${index}`, "user", "auth auth auth"),
+          ];
+        }).flat(),
+        projections.apply,
+        { discard: true },
+      );
+      const result = yield* search.searchThreads({ query: "auth", projectId: project, limit: 3 });
       assert.deepEqual(
         result.matches.map((match) => [match.threadId, match.source]),
         [
@@ -337,6 +357,11 @@ it.effect("starts snippets a few words before the first match so one line shows 
     assert.isAtMost(snippet.length, 240);
     assert.match(snippet, /^…(lead ){2,4}the NEEDLE sits here/);
     assert.isTrue(snippet.endsWith("…"));
+    // Accent-insensitive hits still land in view.
+    assert.match(
+      ThreadSearch.buildSearchSnippet(`${"word ".repeat(60)}un café`, "cafe"),
+      /un café$/,
+    );
     // Short text still moves a late match into view.
     assert.equal(
       ThreadSearch.buildSearchSnippet(`${"word ".repeat(20)}needle`, "needle"),

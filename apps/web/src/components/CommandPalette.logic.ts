@@ -465,10 +465,14 @@ function rankPaletteItem(
   normalizedQuery: string,
   now: number,
   options: { readonly typos: boolean; readonly weight: number },
-): { readonly score: number; readonly ranges: ReadonlyArray<SearchRange> } | null {
+): {
+  readonly score: number;
+  readonly strong: boolean;
+  readonly ranges: ReadonlyArray<SearchRange>;
+} | null {
   if (item.threadSearch) {
     const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
-    return match && { score: match.score, ranges: match.titleRanges };
+    return match && { score: match.score, strong: match.strong, ranges: match.titleRanges };
   }
   const match = scoreSearchTerms(normalizedQuery, item.searchTerms, options);
   // Ranges index the first search term, so they only highlight a title that is that term.

@@ -16,6 +16,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
  * The message search index is keyed by message rowid. VACUUM keeps those
  * rowids today, but SQLite does not promise it, so rebuild the index after one
  * instead of trusting it. Databases from before migration 69 have no index.
+ * The row filter matches migration 69.
  */
 const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch")(function* (
   sql: SqlClient.SqlClient,
@@ -33,7 +34,10 @@ const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch
     SELECT rowid, json_extract(payload_json, '$.text')
     FROM orchestration_v2_projection_messages
     WHERE streaming = 0
-      AND role IN ('user', 'assistant')
+      AND (
+        role = 'assistant'
+        OR (role = 'user' AND COALESCE(json_extract(payload_json, '$.createdBy'), 'user') = 'user')
+      )
       AND json_extract(payload_json, '$.text') IS NOT NULL
   `;
 });

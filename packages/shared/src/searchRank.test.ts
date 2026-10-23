@@ -109,6 +109,10 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("22889", [thread("Stats", { pullRequests: [{ number: 22189 }] })])).toEqual(
       [],
     );
+    // A typo beats a mid-word accident: "ilde" is "idle", not the middle of "Builder".
+    expect(
+      rankTitles("ilde", [thread("Typesafe App Builder"), thread("De-risk idle tunnel cleanup")]),
+    ).toEqual(["De-risk idle tunnel cleanup", "Typesafe App Builder"]);
     // "enter" is not "external" when the right thread is already there.
     expect(
       rankTitles("cmd enter", [thread("Fix Cmd+Enter"), thread("Open links external")]),

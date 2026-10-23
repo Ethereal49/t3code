@@ -159,7 +159,9 @@ function matchToken(field: SearchField, token: string, typos: boolean): TokenMat
       best = { score: MID_WORD, start: index, end: index + token.length };
     }
   }
-  if (best !== null || !typos || token.length < 3 || DIGIT.test(token)) return best;
+  if ((best !== null && best.score > MID_WORD) || !typos || token.length < 3 || DIGIT.test(token)) {
+    return best;
+  }
   for (let index = 0; index < field.text.length; index++) {
     if (!field.wordStarts[index]) continue;
     const word = field.text.slice(index, wordEnd(field, index));
@@ -176,7 +178,7 @@ function matchToken(field: SearchField, token: string, typos: boolean): TokenMat
       }
     }
   }
-  return null;
+  return best;
 }
 
 interface WeightedSearchField {
@@ -187,6 +189,8 @@ interface WeightedSearchField {
 interface SearchFieldsMatch {
   /** Roughly 0.3 (weak) to 1.75 (exact title). */
   readonly quality: number;
+  /** Every token matched at a word start, without a typo. */
+  readonly strong: boolean;
   /** Source ranges matched in the first field, for highlighting. */
   readonly primaryRanges: ReadonlyArray<SearchRange>;
 }
@@ -225,17 +229,21 @@ function matchSearchFields(
   const tokens = normalizedQuery.split(" ");
   const primaryRanges: SearchRange[] = [];
   let total = 0;
+  let strong = true;
   for (const token of tokens) {
     let best = 0;
     let bestPrimary: TokenMatch | null = null;
+    let atWordStart = false;
     for (const { field, weight } of prepared) {
-      if (best >= weight && field !== primary) continue;
+      if (best >= weight && field !== primary && atWordStart) continue;
       const match = matchToken(field, token, options?.typos ?? false);
       if (match === null) continue;
       if (field === primary) bestPrimary = match;
+      if (match.score > TYPO) atWordStart = true;
       if (match.score * weight > best) best = match.score * weight;
     }
     if (best === 0) return null;
+    strong &&= atWordStart;
     if (bestPrimary) primaryRanges.push(bestPrimary);
     total += best;
   }
@@ -244,7 +252,11 @@ function matchSearchFields(
     if (primary.text === normalizedQuery) quality += 0.5;
     else if (tokens.length > 1 && primary.text.includes(normalizedQuery)) quality += 0.25;
   }
-  return { quality, primaryRanges: primary ? toSourceRanges(primary, primaryRanges) : [] };
+  return {
+    quality,
+    strong,
+    primaryRanges: primary ? toSourceRanges(primary, primaryRanges) : [],
+  };
 }
 
 // The server's trigram index cannot match shorter tokens, and a two-letter
@@ -264,6 +276,20 @@ export function messageSearchTokens(normalizedQuery: string): {
     long: tokens.filter((token) => [...token].length >= MESSAGE_TOKEN_MIN_LENGTH),
     short: tokens.filter((token) => [...token].length < MESSAGE_TOKEN_MIN_LENGTH),
   };
+}
+
+/**
+ * Where the first message search token starts in `text`, or 0. Messages can be
+ * long, so a plain lowercase search goes first; folding accents ("cafe" in
+ * "café") only runs when that misses.
+ */
+export function firstSearchTokenOffset(text: string, normalizedQuery: string): number {
+  const { long } = messageSearchTokens(normalizedQuery);
+  const lowerText = text.toLowerCase();
+  const offsets = long.map((token) => lowerText.indexOf(token)).filter((index) => index !== -1);
+  if (offsets.length > 0) return Math.min(...offsets);
+  // Folding is per character, so bound it for very long messages.
+  return findSearchTokenRanges(text.slice(0, 20_000), normalizedQuery)[0]?.start ?? 0;
 }
 
 /**
@@ -404,7 +430,7 @@ function matchReference(
     ...(thread.pullRequests ?? []).flatMap((pullRequest) => pullRequest.references ?? []),
   ];
   return references.some((reference) => reference.toLowerCase().startsWith(normalizedQuery))
-    ? { quality: 0.6, primaryRanges: [] }
+    ? { quality: 0.6, strong: true, primaryRanges: [] }
     : null;
 }
 
@@ -425,6 +451,8 @@ function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: nu
 export interface ThreadSearchMatch {
   /** Match quality times use; what results sort by. */
   readonly score: number;
+  /** Every token matched at a word start; see `rankSearchGroups`. */
+  readonly strong: boolean;
   readonly titleRanges: ReadonlyArray<SearchRange>;
 }
 
@@ -451,11 +479,12 @@ export function scoreThreadSearch(
     matchSearchFields(normalizedQuery.replace(/^#/, ""), fields, options) ??
     matchReference(normalizedQuery, thread) ??
     (boost > 0 && normalizedQuery.length >= PICK_ONLY_MIN_LENGTH
-      ? { quality: 0.5, primaryRanges: [] }
+      ? { quality: 0.5, strong: false, primaryRanges: [] }
       : null);
   if (match === null) return null;
   return {
     score: match.quality * (threadUsageBoost(thread, now) + boost),
+    strong: match.strong,
     titleRanges: match.primaryRanges,
   };
 }
@@ -494,11 +523,16 @@ export interface RankedSearchItem<T, M> {
  * through the score: a thread's score includes its use, so an active thread
  * outranks a setting that matches about as well.
  *
- * Typos are only tried when nothing matches exactly in any group: next to a
- * correct match, typo matches are noise ("enter" finding "external"), and
- * skipping them keeps a keystroke cheap.
+ * Typos are only tried when no result matches every token at a word start:
+ * next to a real match, typo matches are noise ("enter" finding "external"),
+ * but they should beat a mid-word accident ("ilde" in "Builder" for "idle").
+ * Skipping them also keeps a keystroke cheap.
  */
-export function rankSearchGroups<G, T, M extends { readonly score: number }>(
+export function rankSearchGroups<
+  G,
+  T,
+  M extends { readonly score: number; readonly strong: boolean },
+>(
   groups: ReadonlyArray<{ readonly group: G; readonly items: ReadonlyArray<T> }>,
   score: (item: T, options: { readonly typos: boolean }, group: G) => M | null,
 ): Array<{ readonly group: G; readonly ranked: ReadonlyArray<RankedSearchItem<T, M>> }> {
@@ -511,7 +545,9 @@ export function rankSearchGroups<G, T, M extends { readonly score: number }>(
       }),
     }));
   let ranked = rank(false);
-  if (ranked.every((entry) => entry.ranked.length === 0)) ranked = rank(true);
+  if (!ranked.some((entry) => entry.ranked.some(({ match }) => match.strong))) {
+    ranked = rank(true);
+  }
   return ranked
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];
@@ -523,7 +559,7 @@ export function rankSearchGroups<G, T, M extends { readonly score: number }>(
 }
 
 /** `rankSearchGroups` for a single list. */
-export function rankSearchItems<T, M extends { readonly score: number }>(
+export function rankSearchItems<T, M extends { readonly score: number; readonly strong: boolean }>(
   items: ReadonlyArray<T>,
   score: (item: T, options: { readonly typos: boolean }) => M | null,
 ): ReadonlyArray<RankedSearchItem<T, M>> {
@@ -532,6 +568,7 @@ export function rankSearchItems<T, M extends { readonly score: number }>(
 
 export interface SearchTermsMatch {
   readonly score: number;
+  readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
 }
 
@@ -555,5 +592,11 @@ export function scoreSearchTerms(
     fields.map((value, index) => ({ value, weight: index === 0 ? 1 : 0.6 })),
     options,
   );
-  return match && { score: match.quality * (options?.weight ?? 1), ranges: match.primaryRanges };
+  return (
+    match && {
+      score: match.quality * (options?.weight ?? 1),
+      strong: match.strong,
+      ranges: match.primaryRanges,
+    }
+  );
 }

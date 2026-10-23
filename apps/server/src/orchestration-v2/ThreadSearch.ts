@@ -16,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
+  firstSearchTokenOffset,
   messageSearchTokens,
   normalizeSearchQuery,
   rankMessageMatches,
@@ -41,6 +42,7 @@ const SearchRequest = Schema.Struct({
   match: Schema.String,
   // A JSON array in SQL, so any number of short tokens binds as one parameter.
   shortTokens: Schema.fromJsonString(Schema.Array(Schema.String)),
+  projectId: Schema.NullOr(ProjectId),
   limit: Schema.Int,
 });
 const SearchRow = Schema.Struct({
@@ -78,11 +80,7 @@ const SNIPPET_LEAD = 24;
  */
 export function buildSearchSnippet(text: string, query: string): string {
   const normalizedText = text.replace(/\s+/g, " ").trim();
-  const lowerText = normalizedText.toLowerCase();
-  const matchStarts = messageSearchTokens(normalizeSearchQuery(query))
-    .long.map((token) => lowerText.indexOf(token))
-    .filter((index) => index !== -1);
-  const matchStart = matchStarts.length === 0 ? 0 : Math.min(...matchStarts);
+  const matchStart = firstSearchTokenOffset(normalizedText, normalizeSearchQuery(query));
   if (normalizedText.length <= SNIPPET_LENGTH && matchStart <= SNIPPET_LEAD * 2) {
     return normalizedText;
   }
@@ -141,7 +139,7 @@ export const make = Effect.gen(function* () {
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ match, shortTokens, limit }) => sql`
+    execute: ({ match, shortTokens, projectId, limit }) => sql`
       WITH eligible AS MATERIALIZED (
         SELECT threads.thread_id
         FROM orchestration_v2_projection_threads AS threads
@@ -150,6 +148,7 @@ export const make = Effect.gen(function* () {
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
           AND projects.deleted_at IS NULL
+          AND (${projectId} IS NULL OR threads.project_id = ${projectId})
           AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
             IS NOT 'subagent'
       ),
@@ -240,28 +239,34 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const search: ThreadSearch["Service"]["search"] = Effect.fn("ThreadSearch.search")(
-    function* (input) {
-      const messageSearch = buildMessageSearch(input.query);
-      if (messageSearch === null) return { matches: [] };
-      const rows = yield* read(
-        searchRows({
-          match: messageSearch.match,
-          shortTokens: messageSearch.shortTokens,
-          limit: input.limit ?? 50,
-        }),
-      );
-      return {
-        matches: rows.map((row) => ({
-          threadId: row.threadId,
-          projectId: row.projectId,
-          source: row.source,
-          snippet: buildSearchSnippet(row.matchText, input.query),
-          messageCreatedAt: row.messageCreatedAt,
-        })),
-      };
-    },
-  );
+  // A project scope applies before ranking, so other projects' stronger hits
+  // cannot use up the limit.
+  const searchMessages = Effect.fn("ThreadSearch.searchMessages")(function* (
+    input: OrchestrationSearchThreadsInput & { readonly projectId: ProjectId | null },
+  ) {
+    const messageSearch = buildMessageSearch(input.query);
+    if (messageSearch === null) return { matches: [] };
+    const rows = yield* read(
+      searchRows({
+        match: messageSearch.match,
+        shortTokens: messageSearch.shortTokens,
+        projectId: input.projectId,
+        limit: input.limit ?? 50,
+      }),
+    );
+    return {
+      matches: rows.map((row) => ({
+        threadId: row.threadId,
+        projectId: row.projectId,
+        source: row.source,
+        snippet: buildSearchSnippet(row.matchText, input.query),
+        messageCreatedAt: row.messageCreatedAt,
+      })),
+    };
+  });
+
+  const search: ThreadSearch["Service"]["search"] = (input) =>
+    searchMessages({ ...input, projectId: null });
 
   const searchThreads: ThreadSearch["Service"]["searchThreads"] = Effect.fn(
     "ThreadSearch.searchThreads",
@@ -298,7 +303,11 @@ export const make = Effect.gen(function* () {
       }));
     if (titleHits.length >= limit) return { matches: titleHits };
     const shown = new Set(titleHits.map((hit) => hit.threadId));
-    const { matches } = yield* search({ query: input.query, limit: 50 });
+    const { matches } = yield* searchMessages({
+      query: input.query,
+      limit: 50,
+      projectId: input.projectId ?? null,
+    });
     const messageHits = rankMessageMatches(
       matches.flatMap((match, rank) =>
         subjectById.has(match.threadId) && !shown.has(match.threadId) ? [{ ...match, rank }] : [],
