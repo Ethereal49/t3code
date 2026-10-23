@@ -15,9 +15,10 @@ for (let index = 0; index < BASE64.length; index += 1) {
 const COMMA = 44;
 const SEMICOLON = 59;
 /**
- * The arrays below cost 16 bytes per possible segment and 4 per line, sized
- * before any is read. The relay caches two decoded maps in a 128 MB isolate,
- * so each may take 32 MB, about 1.7 times a production map today.
+ * A decoded map holds 16 bytes per possible segment, 4 per line and its
+ * source paths, all known before any segment is read. The relay caches two
+ * decoded maps in a 128 MB isolate, so each may take 32 MB, about 1.7 times a
+ * production map today.
  */
 const MAX_DECODED_BYTES = 32 * 1024 * 1024;
 
@@ -67,7 +68,12 @@ export function decodeSourceMap(raw: unknown): CompactSourceMap | undefined {
     }
   }
 
-  if (capacity * 16 + (lineCount + 1) * 4 > MAX_DECODED_BYTES) return undefined;
+  const prefixLength = typeof sourceRoot === "string" ? sourceRoot.length + 1 : 0;
+  let sourceChars = 0;
+  for (const source of sources) sourceChars += source.length + prefixLength;
+  // A JavaScript string takes up to two bytes a character.
+  const decodedBytes = capacity * 16 + (lineCount + 1) * 4 + sourceChars * 2;
+  if (decodedBytes > MAX_DECODED_BYTES) return undefined;
 
   const lineStarts = new Int32Array(lineCount + 1);
   const generatedColumns = new Int32Array(capacity);

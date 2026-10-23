@@ -83,6 +83,9 @@ describe("decodeSourceMap", () => {
     // 1.7 million lines cost 34 MB of arrays without a single segment.
     const separators = { version: 3, sources: ["a.js"], mappings: ";".repeat(1_700_000) };
     expect(decodeSourceMap(separators)).toBeUndefined();
+    // Two 9 million character paths take up to 36 MB once held.
+    const longSources = { version: 3, sources: ["a".repeat(9e6), "b".repeat(9e6)], mappings: "" };
+    expect(decodeSourceMap(longSources)).toBeUndefined();
   });
 });
 
