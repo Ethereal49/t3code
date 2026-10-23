@@ -444,9 +444,10 @@ export function CommandPalette(props: {
   const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, search.complete);
   const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys, shownCount);
   if (messageOrder !== shownOrder) setShownOrder(messageOrder);
-  const messageMatchKeys = search.complete
-    ? messageOrder.keys
-    : messageOrder.keys.slice(0, shownCount);
+  const messageMatchKeys = useMemo(
+    () => (search.complete ? messageOrder.keys : messageOrder.keys.slice(0, shownCount)),
+    [messageOrder.keys, search.complete, shownCount],
+  );
   const results = useMemo(() => {
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
     // Recent threads leave out the open one, which would always lead them.

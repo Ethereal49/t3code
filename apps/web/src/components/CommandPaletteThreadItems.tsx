@@ -1,4 +1,5 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { requestThreadFindQuery } from "./chat/threadFindActionBus";
 import {
   claimThreadOpen,
   handOffPick,
@@ -9,6 +10,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   foldSearchQuery,
+  messageSearchTokens,
   PALETTE_MESSAGE_LIMIT,
   pickedQuery,
   rankMessageMatches,
@@ -199,6 +201,14 @@ export function useCommandPaletteThreadItems(input: {
           source: match.source,
           snippet: match.snippet,
           query: messageSearch.query,
+        },
+        // Opens the thread with find on the word, so the message is in view.
+        run: async () => {
+          await item.run();
+          requestThreadFindQuery(
+            scopedThreadKey(scopeThreadRef(match.environmentId, match.threadId)),
+            messageSearchTokens(messageSearch.query).long[0] ?? messageSearch.query,
+          );
         },
       },
     ];

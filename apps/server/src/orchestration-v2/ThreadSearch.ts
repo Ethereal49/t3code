@@ -125,6 +125,23 @@ const SNIPPET_LEAD = 24;
 
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
+const MARKDOWN_LINK = /\[([^\]\n]*)\]\(([^)\s]*)\)/g;
+
+/**
+ * Snippet text as a line reads it: links as their text, without emphasis
+ * marks or backticks, whitespace collapsed. A link whose address holds the
+ * match stays whole. The client finds the highlights again in the result.
+ */
+function plainSnippetText(text: string, matchAt: number): string {
+  return text
+    .replace(MARKDOWN_LINK, (link: string, label: string, _url: string, at: number) =>
+      matchAt > at + label.length + 2 && matchAt < at + link.length ? link : label,
+    )
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Up to 240 characters starting a few words before the match at `matchStart`,
  * with ellipses where the text was cut. Only the shown part has its
@@ -132,7 +149,7 @@ const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
  */
 export function buildSearchSnippet(text: string, matchStart: number): string {
   if (matchStart <= SNIPPET_LEAD * 2 && text.length <= SNIPPET_LENGTH * 2) {
-    const whole = text.replace(/\s+/g, " ").trim();
+    const whole = plainSnippetText(text, matchStart);
     if (whole.length <= SNIPPET_LENGTH) return whole;
   }
   let start = Math.max(0, matchStart - SNIPPET_LEAD);
@@ -140,9 +157,9 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
   if (start > 0 && wordStart !== -1) start += wordStart + 1;
   // Cut between characters, not inside an emoji's surrogate pair.
   if (isLowSurrogate(text.charCodeAt(start))) start++;
-  // Collapsing whitespace shortens the text, so read a little more of it.
-  const rawEnd = Math.min(text.length, start + SNIPPET_LENGTH * 2);
-  const shown = text.slice(start, rawEnd).replace(/\s+/g, " ").trim();
+  // Collapsing whitespace and markdown shortens the text, so read more of it.
+  const rawEnd = Math.min(text.length, start + SNIPPET_LENGTH * 3);
+  const shown = plainSnippetText(text.slice(start, rawEnd), matchStart - start);
   const bodyLength = SNIPPET_LENGTH - 2;
   let end = Math.min(shown.length, bodyLength);
   if (isLowSurrogate(shown.charCodeAt(end))) end--;
@@ -332,9 +349,13 @@ export const make = Effect.gen(function* () {
     const hitCounts = new Map<ThreadId, { readonly quality: number; readonly count: number }>();
     const hitCount = (threadId: ThreadId) => hitCounts.get(threadId)?.count ?? 1;
     // Returns how many rows matched as words.
+    // A reread can return rows of threads with only mid-word matches again.
+    const readRows = new Set<number>();
     const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
       let words = 0;
       for (const row of rows) {
+        if (readRows.has(row.messageRowid)) continue;
+        readRows.add(row.messageRowid);
         const match = scoreMessageMatch(row.text, input.query);
         if (match === null) continue;
         if (!match.midWord) words++;

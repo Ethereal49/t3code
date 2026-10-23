@@ -174,8 +174,16 @@ function prepareSearchField(source: string): SearchField {
 }
 
 /** Folded, whitespace-collapsed query; empty when there is nothing to match. */
+// Quotes and backticks around a word, as in a copied "`sidebar`".
+const WRAPPING_QUOTES = /^["'`“”‘’]+|["'`“”‘’]+$/g;
+
 export function foldSearchQuery(query: string): string {
-  return Array.from(query, foldCharacter).join("").replace(/\s+/g, " ").trim();
+  return Array.from(query, foldCharacter)
+    .join("")
+    .split(/\s+/)
+    .map((token) => token.replace(WRAPPING_QUOTES, ""))
+    .filter((token) => token.length > 0)
+    .join(" ");
 }
 
 function wordEnd(field: SearchField, index: number): number {
@@ -446,7 +454,7 @@ interface WeightedSearchField {
 }
 
 interface SearchFieldsMatch {
-  /** Roughly 0.3 (weak) to 1.75 (exact title). */
+  /** Roughly 0.2 (initials) to 1.5 (exact title). */
   readonly quality: number;
   /** Every token matched at a word start, without a typo. */
   readonly strong: boolean;
@@ -549,6 +557,7 @@ export function messageSearchTokens(query: string): {
     .normalize("NFC")
     .toLowerCase()
     .split(/\s+/)
+    .map((token) => token.replace(WRAPPING_QUOTES, ""))
     .filter((token) => token.length > 0);
   const searchable = (token: string) => {
     const length = Array.from(token).length;
@@ -600,10 +609,30 @@ function endsWordAt(text: string, end: number): boolean {
   return end >= text.length || !ALPHANUMERIC.test(text[end]!) || startsWordAt(text, end);
 }
 
+const HEX = /[0-9a-f]/i;
+const HEX_ID_MIN_LENGTH = 7;
+
+/**
+ * Whether `index` sits inside an ID such as a commit SHA or a UUID part: a
+ * run of seven or more hex characters, hyphens allowed, holding both a digit
+ * and a letter. Its digit-letter switches are not word starts in messages,
+ * or "dec" would find "09dec823…" as a word. Titles keep them ("pnpm12").
+ */
+function insideHexId(text: string, index: number): boolean {
+  if (!HEX.test(text[index - 1] ?? "") || !HEX.test(text[index] ?? "")) return false;
+  let start = index;
+  while (start > 0 && (HEX.test(text[start - 1]!) || text[start - 1] === "-")) start--;
+  let end = index;
+  while (end < text.length && (HEX.test(text[end]!) || text[end] === "-")) end++;
+  const run = text.slice(start, end).replaceAll("-", "");
+  return run.length >= HEX_ID_MIN_LENGTH && /\d/.test(run) && /[a-f]/i.test(run);
+}
+
 function startsWordAt(text: string, index: number): boolean {
   const character = text[index]!;
   // A token that opens with punctuation (".ts", "#22889") brings its own boundary.
   if (!ALPHANUMERIC.test(character) && !SYMBOL.test(character)) return true;
+  if (insideHexId(text, index)) return false;
   return isWordStart(
     text[index - 2] ?? "",
     text[index - 1] ?? "",
@@ -700,6 +729,8 @@ function foldMessage(text: string): FoldedMessage {
 
 interface PreparedMessageQuery {
   readonly query: string;
+  /** Every token, in order, as one phrase. */
+  readonly phrase: string;
   readonly tooShort: ReadonlyArray<string>;
   readonly tokens: ReadonlyArray<{
     readonly token: string;
@@ -718,6 +749,13 @@ function prepareMessageQuery(query: string): PreparedMessageQuery {
   const { long, short } = messageSearchTokens(query);
   lastMessageQuery = {
     query,
+    phrase: query
+      .normalize("NFC")
+      .toLowerCase()
+      .split(/\s+/)
+      .map((token) => token.replace(WRAPPING_QUOTES, ""))
+      .filter((token) => token.length > 0)
+      .join(" "),
     tooShort: short,
     tokens: long.map((token) => ({
       token,
@@ -788,13 +826,20 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
         if (folded.endsWord(index + foldedToken.length)) wholeWord = source;
       }
     }
-    if (wordStart === -1 && short) return null;
+    // The index found every token, but folding can still miss one in text it
+    // reads only partly; without it there is no match to show.
+    if (first === -1 || (wordStart === -1 && short)) return null;
     quality = Math.min(
       quality,
       wholeWord !== -1 ? 1 : wordStart !== -1 ? MESSAGE_PREFIX : MID_WORD,
     );
     const at = wholeWord !== -1 ? wholeWord : wordStart !== -1 ? wordStart : first;
     if (at !== -1 && (offset === -1 || at < offset)) offset = at;
+  }
+  // Several words that also occur together show where they do.
+  if (prepared.tokens.length + prepared.tooShort.length > 1) {
+    const phrase = lowerText.indexOf(prepared.phrase);
+    if (phrase !== -1) offset = phrase;
   }
   return { quality, midWord: quality <= MID_WORD, offset: Math.max(offset, 0) };
 }
@@ -1031,7 +1076,8 @@ export interface SearchMatchHint {
 
 // Most threads' branches start with the app's own worktree prefix ("t3/", and
 // "t3code/" before it), so "t3 connect" would match nearly every thread.
-const WORKTREE_BRANCH_PREFIX_PATTERN = new RegExp(`^(?:${WORKTREE_BRANCH_PREFIX}|t3code)/`);
+// Only before more text, so typing "t3/" does not empty the list for a keystroke.
+const WORKTREE_BRANCH_PREFIX_PATTERN = new RegExp(`^(?:${WORKTREE_BRANCH_PREFIX}|t3code)/(?=\\S)`);
 
 function searchableBranch(branch: string | null | undefined): string | null {
   return branch ? branch.replace(WORKTREE_BRANCH_PREFIX_PATTERN, "") : null;
@@ -1185,12 +1231,12 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
 }
 
 /**
- * How strongly a thread's messages match among matches of one quality: more
- * for a thread that keeps using the word than for a passing mention, up to
- * twice as much at about thirty matching messages.
+ * How strongly a thread's messages match among matches of one quality: a
+ * thread that keeps using the word outweighs a recent passing mention, as
+ * hits count for more than recency or use (21 hits about 5.5, one hit 2).
  */
 export function messageMatchWeight(hits: number): number {
-  return 1 + Math.min(Math.log2(1 + hits), 5) / 5;
+  return 1 + Math.log2(1 + hits);
 }
 
 /**

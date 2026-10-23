@@ -287,6 +287,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("inth", [thread("Show skill names in thread overview")])).toEqual([]);
     expect(rankTitles("tos", [thread("Move Client State to Server")])).toEqual([]);
     expect(rankTitles("t3co", [thread("T3 Code vs Gemini")])).toEqual(["T3 Code vs Gemini"]);
+    expect(rankTitles('"sidebar"', [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
     // Three letters of the last word are enough, as it is typed.
     expect(rankTitles("gomod", [thread("Migrate to Go modules")])).toEqual([
       "Migrate to Go modules",
@@ -436,9 +437,16 @@ describe("rankMessageMatches", () => {
   });
 
   it("ranks a thread that keeps using the word above a passing mention of equal quality", () => {
+    // The real case: 21 hits seven weeks back against one this week, opened today.
     const subjects = new Map([
-      ["mention", thread("Mention", { activityAt: NOW - DAY })],
-      ["about", thread("About it", { activityAt: NOW - 10 * DAY })],
+      [
+        "mention",
+        thread("Mention", {
+          activityAt: NOW - 3 * DAY,
+          opens: { openedAt: NOW, score: 1, picks: [] },
+        }),
+      ],
+      ["about", thread("About it", { activityAt: NOW - 48 * DAY })],
     ]);
     const matches = [
       { key: "mention", quality: 1, hits: 1 },
@@ -639,6 +647,15 @@ describe("scoreMessageMatch", () => {
       offset: 18,
     });
     expect(scoreMessageMatch("v12rc build", "rc")?.quality).toBe(1);
+    // IDs are not words: "dec" is not in a commit SHA or a UUID part.
+    expect(scoreMessageMatch("merged 09dec823da0b29 today", "dec")).toBeNull();
+    expect(scoreMessageMatch("id 3C1A8FAC-41D5-4F2A", "fac")).toBeNull();
+    expect(scoreMessageMatch("cafe 7cafe52bb8", "cafe")).toMatchObject({ quality: 1, offset: 0 });
+    // Quotes around a query word, and phrases shown where the words meet.
+    expect(scoreMessageMatch("use the sidebar", "`sidebar`")).toMatchObject({ offset: 8 });
+    expect(
+      scoreMessageMatch("I opened the dev build, then the dev server", "dev server"),
+    ).toMatchObject({ offset: 33 });
     expect(scoreMessageMatch("Fix the CLIAdapter state", "ada")?.quality).toBe(0.8);
     // Words too short for the index must start a word too.
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();

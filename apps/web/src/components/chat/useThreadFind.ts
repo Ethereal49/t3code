@@ -12,7 +12,11 @@ import {
   type ThreadFindStart,
   stepThreadFindIndex,
 } from "./threadFind";
-import { subscribeThreadFindOpen } from "./threadFindActionBus";
+import {
+  subscribeThreadFindOpen,
+  subscribeThreadFindQuery,
+  takeThreadFindQuery,
+} from "./threadFindActionBus";
 import { toastManager } from "../ui/toast";
 
 const EMPTY_SKILLS: readonly InlineSkill[] = [];
@@ -94,6 +98,30 @@ export function useThreadFind({
   });
   const close = useStableCallback(() => setState(CLOSED_FIND));
   useEffect(() => subscribeThreadFindOpen(open), [open]);
+  const openOnQuery = useStableCallback((query: string) => {
+    if (threadKey === null) return;
+    setState((previous) => ({
+      ...(previous.threadKey === threadKey ? previous : CLOSED_FIND),
+      threadKey,
+      query,
+      offset: 0,
+      start: undefined,
+      localSelection: null,
+      focusRequestId: previous.focusRequestId + 1,
+      navigationId: previous.navigationId + 1,
+      requestId: previous.navigationId + 1,
+    }));
+  });
+  // A palette message result opens find on its query once this thread shows.
+  useEffect(() => {
+    if (threadKey === null || !enabled) return;
+    const take = () => {
+      const query = takeThreadFindQuery(threadKey);
+      if (query !== null) openOnQuery(query);
+    };
+    take();
+    return subscribeThreadFindQuery(take);
+  }, [enabled, openOnQuery, threadKey]);
 
   const remote = useServerResults(
     isOpen ? thread : null,

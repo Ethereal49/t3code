@@ -654,6 +654,13 @@ it.effect("starts snippets a few words before the match so one line shows it", (
       snippet(`x${"🚀".repeat(200)}needle`, "needle"),
       /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
     );
+    // Links read as their text and emphasis marks go, unless the match is in the address.
+    assert.equal(
+      ThreadSearch.buildSearchSnippet("See **the** [onboarding notes](https://x.dev/a) now", 0),
+      "See the onboarding notes now",
+    );
+    const inUrl = "Open [notes](https://porpoise.dev/a) now";
+    assert.match(ThreadSearch.buildSearchSnippet(inUrl, inUrl.indexOf("porpoise")), /porpoise/);
     // Short text still moves a late match into view.
     assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
   }),
