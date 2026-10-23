@@ -48,6 +48,10 @@ export const ThreadGuestShare = Schema.Struct({
 });
 export type ThreadGuestShare = typeof ThreadGuestShare.Type;
 
+/** The server keeps an expired share so pending messages stay resolvable; clients label it. */
+export const isGuestShareExpired = (share: ThreadGuestShare, nowMs: number): boolean =>
+  nowMs >= Date.parse(share.expiresAt);
+
 export const pendingGuestMessageCount = (share: ThreadGuestShare | null | undefined): number =>
   share?.messages.filter((message) => message.status === "pending").length ?? 0;
 

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
 import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 import { guestItemEvent, guestTranscriptItem } from "./guestTranscript.ts";
 
@@ -17,7 +18,7 @@ const base = {
   title: "cat .env",
   startedAt: null,
   completedAt: null,
-  updatedAt: new Date(0),
+  updatedAt: DateTime.makeUnsafe(0),
 };
 const item = (fields: Record<string, unknown>) =>
   ({ ...base, ...fields }) as unknown as OrchestrationV2TurnItem;
