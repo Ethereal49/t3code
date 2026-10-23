@@ -11,33 +11,7 @@ import { isSqlError } from "effect/sql/SqlError";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import { indexedMessageCondition } from "../orchestration-v2/messageSearchIndex.ts";
-
-/**
- * The message search index is keyed by message rowid. VACUUM keeps those
- * rowids today, but SQLite does not promise it, so rebuild the index after one
- * instead of trusting it. Databases from before migration 69, or on an SQLite
- * without FTS5 trigrams, have no index.
- */
-const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch")(function* (
-  sql: SqlClient.SqlClient,
-) {
-  const index = yield* sql`
-    SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
-  `;
-  if (index.length === 0) return;
-  yield* sql`
-    INSERT INTO orchestration_v2_message_search (orchestration_v2_message_search)
-    VALUES ('delete-all')
-  `;
-  yield* sql`
-    INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT messages.rowid, ' ' || json_extract(messages.payload_json, '$.text')
-    FROM orchestration_v2_projection_messages AS messages
-    WHERE ${indexedMessageCondition(sql)}
-      AND json_extract(messages.payload_json, '$.text') IS NOT NULL
-  `;
-});
+import { rebuildMessageSearch } from "../orchestration-v2/messageSearchIndex.ts";
 
 export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingError>()(
   "DatabaseMissingError",
