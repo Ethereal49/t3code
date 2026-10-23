@@ -25,6 +25,9 @@ const sentThreadOpens = new Map<string, number>();
 // When this client last opened each thread, sent or not, so recent threads
 // follow quick switches the server merges.
 const localThreadOpens = new Map<string, number>();
+// Opens a palette pick sent, by the watermark they carried, until the thread
+// view mounts and takes them.
+const pickedOpens = new Map<string, string>();
 
 /**
  * Records that this client opened a thread, and says whether to send the open
@@ -38,6 +41,31 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
   }
   sentThreadOpens.set(key, now);
   return true;
+}
+
+/**
+ * A palette pick sends the open itself, with its query, marking the thread
+ * visited at `visitedAt`; the thread view takes it with `takePickedOpen`.
+ */
+export function claimPickedOpen(
+  environmentId: EnvironmentId,
+  threadId: string,
+  now: number,
+  visitedAt: string,
+) {
+  claimThreadOpen(environmentId, threadId, now);
+  pickedOpens.set(`${environmentId}:${threadId}`, visitedAt);
+}
+
+/**
+ * Whether a palette pick just sent this thread's open with the same
+ * watermark, so the thread view needs no visit of its own. Answers once.
+ */
+export function takePickedOpen(environmentId: EnvironmentId, threadId: string, visitedAt: string) {
+  const key = `${environmentId}:${threadId}`;
+  const picked = pickedOpens.get(key);
+  pickedOpens.delete(key);
+  return picked === visitedAt;
 }
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {

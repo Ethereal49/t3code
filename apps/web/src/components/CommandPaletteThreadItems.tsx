@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
-  claimThreadOpen,
+  claimPickedOpen,
   nextShownOrder,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
@@ -147,7 +147,7 @@ export function useCommandPaletteThreadItems(input: {
         !threadSearchQuery.startsWith(">") &&
         thread.lastVisitedAt !== undefined
       ) {
-        claimThreadOpen(thread.environmentId, thread.id, Date.now());
+        claimPickedOpen(thread.environmentId, thread.id, Date.now(), thread.updatedAt);
         void visitThread({
           environmentId: thread.environmentId,
           input: {

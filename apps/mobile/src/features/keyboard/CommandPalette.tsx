@@ -1,7 +1,7 @@
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
-  claimThreadOpen,
+  claimPickedOpen,
   nextShownOrder,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
@@ -458,7 +458,7 @@ export function CommandPalette(props: {
           )
         : undefined;
     if (thread && thread.lastVisitedAt !== undefined) {
-      claimThreadOpen(thread.environmentId, thread.id, Date.now());
+      claimPickedOpen(thread.environmentId, thread.id, Date.now(), thread.updatedAt);
       void visitThread({
         environmentId: thread.environmentId,
         input: {

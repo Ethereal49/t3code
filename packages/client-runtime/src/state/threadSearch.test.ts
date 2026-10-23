@@ -12,7 +12,9 @@ import {
   claimThreadOpen,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
+  claimPickedOpen,
   nextShownOrder,
+  takePickedOpen,
   threadSearchMatchKey,
   threadSearchSubject,
   visibleThreadSearch,
@@ -187,4 +189,13 @@ it("keeps shown message rows in place when a slower environment answers", () => 
   expect(nextShownOrder(second, "needle", ["b1", "a1", "a2"])).toBe(second);
   // A new query starts from its own ranking.
   expect(nextShownOrder(second, "needles", ["b1", "a1"]).keys).toEqual(["b1", "a1"]);
+});
+
+it("lets the thread view skip the visit a palette pick just sent, once", () => {
+  const visitedAt = "2026-10-01T00:00:00.000Z";
+  claimPickedOpen(envA, "thread-picked", 0, visitedAt);
+  expect(takePickedOpen(envA, "thread-picked", visitedAt)).toBe(true);
+  expect(takePickedOpen(envA, "thread-picked", visitedAt)).toBe(false);
+  claimPickedOpen(envA, "thread-moved", 0, visitedAt);
+  expect(takePickedOpen(envA, "thread-moved", "2026-10-02T00:00:00.000Z")).toBe(false);
 });

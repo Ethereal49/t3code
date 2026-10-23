@@ -131,7 +131,7 @@ import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { claimThreadOpen } from "@t3tools/client-runtime/state/thread-search";
+import { claimThreadOpen, takePickedOpen } from "@t3tools/client-runtime/state/thread-search";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
   clearThreadComposerError,
@@ -412,9 +412,12 @@ function ThreadVisitWatermark(props: {
     if (!showContent || selectedThreadLastVisitedAt === undefined) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
-    if (!claimThreadOpen(props.environmentId, selectedThreadId, Date.now())) return;
+    // A palette pick already sent this open with the same watermark.
+    const picked = takePickedOpen(props.environmentId, selectedThreadId, selectedThreadUpdatedAt);
+    if (!picked && !claimThreadOpen(props.environmentId, selectedThreadId, Date.now())) return;
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
+    if (picked) return;
     void visitThread({
       environmentId: props.environmentId,
       input: { threadId: selectedThreadId, visitedAt: selectedThreadUpdatedAt, opened: true },

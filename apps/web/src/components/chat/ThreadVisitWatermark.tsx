@@ -1,7 +1,7 @@
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { claimThreadOpen } from "@t3tools/client-runtime/state/thread-search";
+import { claimThreadOpen, takePickedOpen } from "@t3tools/client-runtime/state/thread-search";
 import { useEffect, useRef } from "react";
 import { useUiStateStore } from "../../uiStateStore";
 import { threadEnvironment } from "../../state/threads";
@@ -34,9 +34,18 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
     if (!serverThread?.id || serverThread.lastVisitedAt === undefined) return;
     if (recordedOpenRef.current === threadKey) return;
     recordedOpenRef.current = threadKey;
-    if (!claimThreadOpen(serverThread.environmentId, serverThread.id, Date.now())) return;
+    // A palette pick already sent this open with the same watermark.
+    const picked = takePickedOpen(
+      serverThread.environmentId,
+      serverThread.id,
+      serverThread.updatedAt,
+    );
+    if (!picked && !claimThreadOpen(serverThread.environmentId, serverThread.id, Date.now())) {
+      return;
+    }
     lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
     lastVisitDispatchAtRef.current = Date.now();
+    if (picked) return;
     void visitThreadMutation({
       environmentId: serverThread.environmentId,
       input: { threadId: serverThread.id, visitedAt: serverThread.updatedAt, opened: true },

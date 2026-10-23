@@ -229,7 +229,18 @@ function matchToken(
   ) {
     // A token that opens with punctuation (".ts") brings its own boundary, as in messages.
     if (field.wordStarts[index] || ownBoundary) {
-      const wordLength = wordEnd(field, index) - index;
+      // A punctuation-led token is whole when it covers the word after the
+      // punctuation: ".ts" is whole in "index.ts", a prefix in "parser.tsx".
+      let wordStart = index;
+      while (
+        ownBoundary &&
+        wordStart < field.text.length &&
+        !ALPHANUMERIC.test(field.text[wordStart]!)
+      ) {
+        wordStart++;
+      }
+      const wordLength =
+        (wordStart < field.text.length ? wordEnd(field, wordStart) : wordStart) - index;
       const score =
         token.length >= wordLength ? WHOLE_WORD : 0.7 + (0.2 * token.length) / wordLength;
       if (best === null || score > best.score) {

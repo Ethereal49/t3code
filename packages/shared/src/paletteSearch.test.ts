@@ -50,6 +50,10 @@ describe("scoreThreadSearch", () => {
     expect(starts("Fix JSONSchema parsing", "sch")).toEqual([{ start: 8, end: 11 }]);
     expect(starts("Fix HTTPServer crash", "ser")).toEqual([{ start: 8, end: 11 }]);
     expect(starts("Rename index.ts", ".ts")).toEqual([{ start: 12, end: 15 }]);
+    expect(rankTitles(".ts", [thread("Fix parser.tsx"), thread("Rename index.ts")])).toEqual([
+      "Rename index.ts",
+      "Fix parser.tsx",
+    ]);
     // Short tokens never match mid-word.
     expect(scoreThreadSearch("ci", thread("Decision log"), NOW)).toBeNull();
   });
