@@ -132,6 +132,7 @@ import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { takeThreadSearchPick } from "@t3tools/client-runtime/state/thread-search";
+import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/searchRank";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
   clearThreadComposerError,
@@ -408,11 +409,15 @@ function ThreadVisitWatermark(props: {
   // Opening a thread is one visit that also counts toward search ranking, with
   // the palette query that picked it; the watermark effect below then skips it.
   const recordedOpenRef = useRef<string | null>(null);
+  const selectedThreadOpenedAt = thread.opens?.openedAt;
   useEffect(() => {
     if (!showContent || selectedThreadLastVisitedAt === undefined) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
     const searchQuery = takeThreadSearchPick(selectedThreadKey);
+    const openedAt = selectedThreadOpenedAt ? Date.parse(selectedThreadOpenedAt) : NaN;
+    // The server would merge it into the last open anyway.
+    if (!searchQuery && Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
     void visitThread({
@@ -429,6 +434,7 @@ function ThreadVisitWatermark(props: {
     selectedThreadId,
     selectedThreadKey,
     selectedThreadLastVisitedAt,
+    selectedThreadOpenedAt,
     selectedThreadUpdatedAt,
     showContent,
     visitThread,

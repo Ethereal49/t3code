@@ -2,6 +2,7 @@ import { type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { takeThreadSearchPick } from "@t3tools/client-runtime/state/thread-search";
+import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/searchRank";
 import { useEffect, useRef } from "react";
 import { useUiStateStore } from "../../uiStateStore";
 import { threadEnvironment } from "../../state/threads";
@@ -36,6 +37,9 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
     if (recordedOpenRef.current === threadKey) return;
     recordedOpenRef.current = threadKey;
     const searchQuery = takeThreadSearchPick(threadKey);
+    const openedAt = serverThread.opens ? Date.parse(serverThread.opens.openedAt) : NaN;
+    // The server would merge it into the last open anyway.
+    if (!searchQuery && Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
     lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
     lastVisitDispatchAtRef.current = Date.now();
     void visitThreadMutation({
@@ -52,6 +56,7 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
     serverThread?.environmentId,
     serverThread?.id,
     serverThread?.lastVisitedAt,
+    serverThread?.opens,
     serverThread?.updatedAt,
     visitThreadMutation,
   ]);
