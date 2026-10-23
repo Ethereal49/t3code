@@ -12,7 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 import { useMemo, useState } from "react";
-import { View } from "react-native";
+import { ScrollView, View } from "react-native";
 
 import { Button } from "../../components/ui/Button";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -118,33 +118,36 @@ export function ThreadGuestShareBar(props: {
         </Text>
         <Button label="Stop sharing" tone="text" disabled={disabled} onPress={stopSharing} />
       </View>
-      {pending.map((message) => (
-        <View
-          key={message.id}
-          className="mx-3 mb-2 gap-2 rounded-xl border border-border bg-screen p-3"
-        >
-          <Text className="text-sm text-foreground">
-            <Text className="font-t3-medium">{guestName} (guest): </Text>
-            {message.text}
-          </Text>
-          <View className="flex-row gap-2">
-            <Button
-              label="Send"
-              tone="primary"
-              accessibilityLabel={`Send message from ${guestName}`}
-              disabled={disabled}
-              onPress={() => resolve(message.id, "send")}
-            />
-            <Button
-              label="Dismiss"
-              tone="secondary"
-              accessibilityLabel={`Dismiss message from ${guestName}`}
-              disabled={disabled}
-              onPress={() => resolve(message.id, "dismiss")}
-            />
+      {/* Bounded so a long message or several of them never push the composer off screen. */}
+      <ScrollView style={{ maxHeight: 320 }} nestedScrollEnabled>
+        {pending.map((message) => (
+          <View
+            key={message.id}
+            className="mx-3 mb-2 gap-2 rounded-xl border border-border bg-screen p-3"
+          >
+            <Text className="text-sm text-foreground">
+              <Text className="font-t3-medium">{guestName} (guest): </Text>
+              {message.text}
+            </Text>
+            <View className="flex-row gap-2">
+              <Button
+                label="Send"
+                tone="primary"
+                accessibilityLabel={`Send message from ${guestName}`}
+                disabled={disabled}
+                onPress={() => resolve(message.id, "send")}
+              />
+              <Button
+                label="Dismiss"
+                tone="secondary"
+                accessibilityLabel={`Dismiss message from ${guestName}`}
+                disabled={disabled}
+                onPress={() => resolve(message.id, "dismiss")}
+              />
+            </View>
           </View>
-        </View>
-      ))}
+        ))}
+      </ScrollView>
     </View>
   );
 }
