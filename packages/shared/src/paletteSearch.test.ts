@@ -228,11 +228,13 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       branch: "t3/cleanup-payloads",
       pullRequests: [{ number: 22889, title: "Smaller MCP payloads" }],
     });
-    expect(scoreThreadSearch("#22889", subject, NOW)?.explain?.()).toEqual({
-      label: "PR",
-      text: "#22889 Smaller MCP payloads",
-      ranges: [{ start: 1, end: 6 }],
-    });
+    for (const query of ["#22889", "pr 22889", "pr22889", "pull request #22889"]) {
+      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW)?.explain?.(), query).toEqual({
+        label: "PR",
+        text: "#22889 Smaller MCP payloads",
+        ranges: [{ start: 1, end: 6 }],
+      });
+    }
     // The app's own worktree prefix is not part of what the branch says.
     expect(scoreThreadSearch("cleanup", subject, NOW)?.explain?.()).toEqual({
       label: "Branch",
@@ -268,6 +270,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("inth", [thread("Show skill names in thread overview")])).toEqual([]);
     expect(rankTitles("tos", [thread("Move Client State to Server")])).toEqual([]);
     expect(rankTitles("t3co", [thread("T3 Code vs Gemini")])).toEqual(["T3 Code vs Gemini"]);
+    expect(rankTitles('"sidebar lag"', [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
     // Three letters of the last word are enough, as it is typed.
     expect(rankTitles("gomod", [thread("Migrate to Go modules")])).toEqual([
       "Migrate to Go modules",
@@ -362,6 +365,7 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     for (const query of [
       "t3code#22889",
       "github.com/pingdotgg/t3code/pull/22889",
+      "https://github.com/pingdotgg/t3code/pull/22889/files",
       "5fe6f59c",
       "beebox",
     ]) {
@@ -595,6 +599,7 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("saved two drafts", "fts")).toBeNull();
     expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
     expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
+    expect(scoreMessageMatch("Use the sidebar", '"sidebar"')).toEqual({ quality: 1, offset: 8 });
     // A whole word beats a word prefix: "mode" prefers "mode" over "model".
     expect(scoreMessageMatch("model settings", "mode")?.quality).toBe(0.8);
     expect(scoreMessageMatch("The model and the mode switch", "mode")).toEqual({

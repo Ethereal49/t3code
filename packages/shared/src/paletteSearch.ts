@@ -132,9 +132,12 @@ function prepareSearchField(source: string): SearchField {
   return field;
 }
 
+// Quotes around a pasted query: "fix sidebar".
+const WRAPPING_QUOTES = /^\s*["'`“”‘’]+|["'`“”‘’]+\s*$/g;
+
 /** Folded, whitespace-collapsed query; empty when there is nothing to match. */
 export function foldSearchQuery(query: string): string {
-  return foldInPlace(query)
+  return foldInPlace(query.replace(WRAPPING_QUOTES, ""))
     .split(/\s+/)
     .filter((token) => token.length > 0)
     .join(" ");
@@ -148,33 +151,27 @@ function wordEnd(field: SearchField, index: number): number {
   return end;
 }
 
-// One substitution, insertion, deletion, or swap of neighbours.
-function withinOneEdit(left: string, right: string): boolean {
-  if (Math.abs(left.length - right.length) > 1) return false;
+// One substitution, insertion, deletion, or swap of neighbours; with
+// `swapOnly`, only a swap.
+function withinOneEdit(left: string, right: string, swapOnly: boolean): boolean {
+  if (Math.abs(left.length - right.length) > (swapOnly ? 0 : 1)) return false;
   let index = 0;
   while (index < left.length && index < right.length && left[index] === right[index]) index++;
   const restLeft = left.slice(index);
   const restRight = right.slice(index);
-  if (restLeft === restRight) return true;
-  if (restLeft.slice(1) === restRight.slice(1)) return true;
-  if (restLeft.slice(1) === restRight || restLeft === restRight.slice(1)) return true;
-  return (
+  const swapped =
+    restLeft.length > 1 &&
     restLeft[0] === restRight[1] &&
     restLeft[1] === restRight[0] &&
-    restLeft.slice(2) === restRight.slice(2)
+    restLeft.slice(2) === restRight.slice(2);
+  if (swapOnly) return swapped;
+  return (
+    swapped ||
+    restLeft === restRight ||
+    restLeft.slice(1) === restRight.slice(1) ||
+    restLeft.slice(1) === restRight ||
+    restLeft === restRight.slice(1)
   );
-}
-
-function isSwap(left: string, right: string): boolean {
-  for (let index = 0; index < left.length - 1; index++) {
-    if (left[index] === right[index]) continue;
-    return (
-      left[index] === right[index + 1] &&
-      left[index + 1] === right[index] &&
-      left.slice(index + 2) === right.slice(index + 2)
-    );
-  }
-  return false;
 }
 
 const WHOLE_WORD = 1;
@@ -266,7 +263,7 @@ function matchToken(
       for (const length of lengths) {
         if (length > word.length) continue;
         const prefix = word.slice(0, length);
-        if (swapOnly ? isSwap(token, prefix) : withinOneEdit(token, prefix)) {
+        if (withinOneEdit(token, prefix, swapOnly)) {
           return { score: TYPO, start: index, end: index + length };
         }
       }
@@ -469,6 +466,7 @@ export function messageSearchTokens(query: string): {
   readonly short: ReadonlyArray<string>;
 } {
   const tokens = query
+    .replace(WRAPPING_QUOTES, "")
     .normalize("NFC")
     .toLowerCase()
     .split(/\s+/)
@@ -652,7 +650,8 @@ export function pickedQuery(query: string): string {
   return (/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut).trim();
 }
 
-function decay(ageMs: number): number {
+/** How much something `ageMs` old still counts: 1 now, half after two weeks. */
+export function decay(ageMs: number): number {
   return 2 ** (-Math.max(0, ageMs) / SEARCH_RECENCY_HALF_LIFE_MS);
 }
 
@@ -736,7 +735,10 @@ function matchReference(
   const anywhere = DIGIT.test(normalizedQuery);
   return references.some((reference) => {
     const folded = reference.toLowerCase();
-    return anywhere ? folded.includes(normalizedQuery) : folded.startsWith(normalizedQuery);
+    // A pasted link may go on past the reference: ".../pull/22889/files".
+    return anywhere
+      ? folded.includes(normalizedQuery) || normalizedQuery.startsWith(folded)
+      : folded.startsWith(normalizedQuery);
   })
     ? { quality: 0.6, strong: true, primaryRanges: [] }
     : null;
@@ -862,9 +864,10 @@ export function scoreThreadSearch(
   if (thread.environmentLabel) {
     fields.push({ value: thread.environmentLabel, weight: 0.25, context: true });
   }
-  // "#22889" and a pasted "t3/branch" search without their prefixes, as the
-  // branch field is stored without the app's worktree prefix.
+  // "#22889", "pr 22889", and a pasted "t3/branch" search without their
+  // prefixes, as the branch field is stored without the app's worktree prefix.
   const fieldQuery = normalizedQuery
+    .replace(/^(?:pr|pull request|pull)\s*(?=#?\d)/, "")
     .replace(/^#\s*/, "")
     .replace(WORKTREE_BRANCH_PREFIX_PATTERN, "");
   const fieldMatch = matchSearchFields(fieldQuery, fields, options);
