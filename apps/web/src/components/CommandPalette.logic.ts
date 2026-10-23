@@ -1,11 +1,14 @@
 import {
-  normalizeSearchQuery,
+  foldSearchQuery,
+  PALETTE_MESSAGE_LIMIT,
+  PALETTE_SECONDARY_LIMIT,
+  PALETTE_THREAD_LIMIT,
   rankSearchGroups,
   scoreSearchTerms,
   scoreThreadSearch,
   type SearchRange,
   type ThreadSearchSubject,
-} from "@t3tools/shared/searchRank";
+} from "@t3tools/shared/paletteSearch";
 import { threadSearchSubject } from "@t3tools/client-runtime/state/thread-search";
 import type { CommandPaletteLinkedThreads } from "../commandPaletteBus";
 import {
@@ -33,9 +36,6 @@ import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 import { isSidebarSubagentThread } from "./Sidebar.logic";
 
 export const RECENT_THREAD_LIMIT = 12;
-/** Past this many, a query should be narrowed; the cap also keeps "In messages" in reach. */
-const THREAD_SEARCH_RESULT_LIMIT = 20;
-const THREAD_MESSAGE_RESULT_LIMIT = 10;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
@@ -391,6 +391,8 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   renderTrailingContent?: (thread: TThread) => ReactNode;
   renderDescription?: (thread: TThread, meta: { projectTitle: string | undefined }) => ReactNode;
   runThread: (thread: TThread) => Promise<void>;
+  /** Makes the environment searchable; pass it only with two or more environments. */
+  environmentLabelOf?: (thread: TThread) => string | null;
   limit?: number;
 }): CommandPaletteActionItem[] {
   const sortedThreads = sortThreads(
@@ -439,6 +441,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
             opens: thread.opens ?? null,
           },
           projectTitle,
+          input.environmentLabelOf?.(thread),
         ),
         title: thread.title,
         description,
@@ -480,9 +483,6 @@ function rankPaletteItem(
   return match && (item.title === item.searchTerms[0] ? match : { ...match, ranges: [] });
 }
 
-// Next to matching threads, other groups show only their best few rows.
-const SECONDARY_GROUP_LIMIT = 3;
-
 /**
  * Filters and ranks the palette for a query. Groups order by the class of their
  * best match, and on equal classes commands come first, then threads, so "new"
@@ -503,7 +503,7 @@ export function filterCommandPaletteGroups(input: {
 }): CommandPaletteGroup[] {
   const isActionsFilter = input.query.startsWith(">");
   const searchQuery = isActionsFilter ? input.query.slice(1) : input.query;
-  const normalizedQuery = normalizeSearchQuery(searchQuery);
+  const normalizedQuery = foldSearchQuery(searchQuery);
 
   if (normalizedQuery.length === 0) {
     if (isActionsFilter) {
@@ -565,9 +565,9 @@ export function filterCommandPaletteGroups(input: {
       );
     const limit =
       group.value === "threads-search"
-        ? THREAD_SEARCH_RESULT_LIMIT
+        ? PALETTE_THREAD_LIMIT
         : searchesEverything && threadsMatch
-          ? SECONDARY_GROUP_LIMIT
+          ? PALETTE_SECONDARY_LIMIT
           : items.length;
     return { value: group.value, label: group.label, items: items.slice(0, limit) };
   });
@@ -576,7 +576,7 @@ export function filterCommandPaletteGroups(input: {
   const listed = new Set(groups.flatMap((group) => group.items.map((item) => item.value)));
   const messageItems = input.threadMessageItems
     .filter((item) => !listed.has(item.value))
-    .slice(0, THREAD_MESSAGE_RESULT_LIMIT);
+    .slice(0, PALETTE_MESSAGE_LIMIT);
   return messageItems.length === 0
     ? groups
     : [...groups, { value: "threads-messages", label: "In messages", items: messageItems }];

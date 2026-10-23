@@ -6,11 +6,11 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
-  normalizeSearchQuery,
+  foldSearchQuery,
   rankMessageMatches,
   splitSearchText,
   THREAD_SEARCH_PICK_MAX_LENGTH,
-} from "@t3tools/shared/searchRank";
+} from "@t3tools/shared/paletteSearch";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -377,7 +377,11 @@ export function CommandPalette(props: {
           title: thread.title || "Untitled thread",
           detail: [project?.title, environment].filter(Boolean).join(" · "),
           searchTerms: [],
-          threadSearch: threadSearchSubject(thread, project?.title),
+          threadSearch: threadSearchSubject(
+            thread,
+            project?.title,
+            environments.length > 1 ? environment : null,
+          ),
           run: () => selectThread(thread),
         };
       });
@@ -385,6 +389,7 @@ export function CommandPalette(props: {
   }, [
     activeThread,
     activeThreadRef,
+    environments.length,
     navigation,
     projects,
     runCommand,
@@ -402,7 +407,7 @@ export function CommandPalette(props: {
     const messageMatchKeys = rankMessageMatches(
       search.matches,
       (match) => subjectByKey.get(keyOf(match)),
-      normalizeSearchQuery(query),
+      foldSearchQuery(query),
       now,
     ).map(keyOf);
     return filterCommandPaletteItems(items, query, messageMatchKeys, now);

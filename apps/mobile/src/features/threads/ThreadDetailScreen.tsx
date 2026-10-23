@@ -131,7 +131,7 @@ import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/searchRank";
+import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/paletteSearch";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
   clearThreadComposerError,

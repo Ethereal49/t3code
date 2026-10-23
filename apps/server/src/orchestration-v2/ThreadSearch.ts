@@ -19,12 +19,12 @@ import {
   firstSearchTokenOffset,
   messageSearchTokens,
   messageTokenNeedsWordStart,
-  normalizeSearchQuery,
+  foldSearchQuery,
   rankMessageMatches,
   rankSearchItems,
   scoreThreadSearch,
   type ThreadSearchSubject,
-} from "@t3tools/shared/searchRank";
+} from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
 export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
@@ -327,8 +327,10 @@ export const make = Effect.gen(function* () {
     "ThreadSearch.searchThreads",
   )(function* (input) {
     const limit = input.limit ?? 50;
-    const normalizedQuery = normalizeSearchQuery(input.query);
+    const normalizedQuery = foldSearchQuery(input.query);
     const now = DateTime.toEpochMillis(yield* DateTime.now);
+    // Agents call this rarely, and a project has hundreds of threads, not
+    // millions, so ranking every active thread in memory stays cheap.
     const candidates = yield* read(titleCandidates({ projectId: input.projectId ?? null }));
     const subjectById = new Map(
       candidates.map((row): [ThreadId, ThreadSearchSubject] => [
@@ -339,7 +341,10 @@ export const make = Effect.gen(function* () {
           branch: row.thread.branch,
           projectTitle: row.projectTitle,
           pullRequests: threadSearchPullRequests(row.thread),
-          activityAt: row.latestUserMessageAt === null ? null : Date.parse(row.latestUserMessageAt),
+          // Like the clients: the latest user message, else the last update.
+          activityAt: Date.parse(
+            row.latestUserMessageAt ?? DateTime.formatIso(row.thread.updatedAt),
+          ),
           opens: row.thread.opens
             ? { ...row.thread.opens, openedAt: DateTime.toEpochMillis(row.thread.opens.openedAt) }
             : null,

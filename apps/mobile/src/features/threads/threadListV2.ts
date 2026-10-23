@@ -14,7 +14,7 @@ import {
   threadSearchMatchKey,
   threadSearchSubject,
 } from "@t3tools/client-runtime/state/thread-search";
-import { normalizeSearchQuery, scoreThreadSearch } from "@t3tools/shared/searchRank";
+import { foldSearchQuery, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import {
   createInboxReturnTracker,
   isThreadWorking,
@@ -605,7 +605,7 @@ export function buildThreadListV2Items(input: {
             pendingOrder: null,
           }),
         );
-  const query = normalizeSearchQuery(input.searchQuery);
+  const query = foldSearchQuery(input.searchQuery);
   const nowMs = Date.parse(now);
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))

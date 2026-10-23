@@ -243,9 +243,9 @@
       "types": "./src/threadReference.ts",
       "import": "./src/threadReference.ts"
     },
-    "./searchRank": {
-      "types": "./src/searchRank.ts",
-      "import": "./src/searchRank.ts"
+    "./paletteSearch": {
+      "types": "./src/paletteSearch.ts",
+      "import": "./src/paletteSearch.ts"
     },
     "./threadPullRequests": {
       "types": "./src/threadPullRequests.ts",

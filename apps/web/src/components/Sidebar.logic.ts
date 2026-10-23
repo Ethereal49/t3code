@@ -12,11 +12,7 @@ import {
   threadSearchSubject,
   type ThreadSearchShell,
 } from "@t3tools/client-runtime/state/thread-search";
-import {
-  normalizeSearchQuery,
-  rankSearchItems,
-  scoreThreadSearch,
-} from "@t3tools/shared/searchRank";
+import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@t3tools/shared/paletteSearch";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
@@ -1000,7 +996,7 @@ export function searchSidebarThreads<
   contentMatchKeys: ReadonlySet<string> = EMPTY_CONTENT_MATCH_KEYS,
   now = Date.now(),
 ): T[] {
-  const normalizedQuery = normalizeSearchQuery(query);
+  const normalizedQuery = foldSearchQuery(query);
   if (normalizedQuery.length === 0) return [];
   const titleMatches = rankSearchItems(threads, (thread, options) =>
     scoreThreadSearch(normalizedQuery, threadSearchSubject(thread, null), now, options),

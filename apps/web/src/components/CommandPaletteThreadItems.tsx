@@ -1,10 +1,10 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import {
-  normalizeSearchQuery,
+  foldSearchQuery,
   rankMessageMatches,
   THREAD_SEARCH_PICK_MAX_LENGTH,
-} from "@t3tools/shared/searchRank";
+} from "@t3tools/shared/paletteSearch";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -87,8 +87,15 @@ export function useCommandPaletteThreadItems(input: {
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
   const [now] = useState(() => Date.now());
 
+  const { environments } = useEnvironments();
   const threadItems = buildThreadActionItems({
     threads,
+    ...(environments.length > 1
+      ? {
+          environmentLabelOf: (thread: (typeof threads)[number]) =>
+            projectEnvironmentLocationById.get(thread.environmentId)?.label ?? null,
+        }
+      : {}),
     ...(activeThread ? { activeThread } : {}),
     projectByKey,
     sortOrder: sidebarThreadSortOrder,
@@ -162,7 +169,7 @@ export function useCommandPaletteThreadItems(input: {
   const threadMessageItems = rankMessageMatches(
     messageSearch.matches,
     (match) => itemForMatch(match)?.threadSearch,
-    normalizeSearchQuery(threadSearchQuery),
+    foldSearchQuery(threadSearchQuery),
     now,
   ).flatMap((match) => {
     const item = itemForMatch(match);

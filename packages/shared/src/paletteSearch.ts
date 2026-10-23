@@ -3,10 +3,13 @@
  * the MCP thread search, so every surface puts the same thread first.
  *
  * A match scores by quality: a whole word beats a word prefix, which beats a
- * one-typo prefix, which beats a mid-word substring. Word starts include
- * camelCase, kebab, path, and letter/digit boundaries. Thread scores then
- * multiply quality by how recently and often the thread was used.
+ * one-typo prefix, which beats a mid-word substring, which beats letters
+ * spread out like initials. Word starts include camelCase, kebab, path, and
+ * letter/digit boundaries. Thread scores then multiply quality by how recently
+ * and often the thread was used, within limits.
  */
+
+import { scoreSubsequenceMatch } from "./searchRanking.ts";
 
 const ALPHANUMERIC = /[\p{L}\p{N}]/u;
 const LOWERCASE = /\p{Ll}/u;
@@ -105,7 +108,7 @@ function prepareSearchField(source: string): SearchField {
 }
 
 /** Folded, whitespace-collapsed query; empty when there is nothing to match. */
-export function normalizeSearchQuery(query: string): string {
+export function foldSearchQuery(query: string): string {
   return Array.from(query, foldCharacter).join("").replace(/\s+/g, " ").trim();
 }
 
@@ -149,6 +152,7 @@ function isSwap(left: string, right: string): boolean {
 const WHOLE_WORD = 1;
 const MID_WORD = 0.3;
 const TYPO = 0.45;
+const SUBSEQUENCE = 0.2;
 
 interface TokenMatch extends SearchRange {
   readonly score: number;
@@ -159,9 +163,15 @@ interface TokenMatch extends SearchRange {
  * characters only match at a word start ("del" should not find "model"). With
  * `typos`, a three-character token may swap a pair and a longer one may carry
  * one typo in a word prefix that keeps its first letter. Numbers never match
- * with a typo: 22889 is not pull request 22189.
+ * with a typo: 22889 is not pull request 22189. With `subsequence`, the letters
+ * may also be spread out (see `matchSubsequence`).
  */
-function matchToken(field: SearchField, token: string, typos: boolean): TokenMatch | null {
+function matchToken(
+  field: SearchField,
+  token: string,
+  typos: boolean,
+  subsequence: boolean,
+): TokenMatch | null {
   let best: TokenMatch | null = null;
   for (
     let index = field.text.indexOf(token);
@@ -199,7 +209,23 @@ function matchToken(field: SearchField, token: string, typos: boolean): TokenMat
       }
     }
   }
-  return best;
+  return best ?? (subsequence ? matchSubsequence(field, token) : null);
+}
+
+/**
+ * The letters of `token` in order, starting at a word start: "fxsb" for "Fix
+ * sidebar", as in VS Code or Raycast. Weakest match, tried last.
+ */
+function matchSubsequence(field: SearchField, token: string): TokenMatch | null {
+  if (token.length < 3 || DIGIT.test(token)) return null;
+  for (let index = 0; index < field.text.length; index++) {
+    if (!field.wordStarts[index] || field.text[index] !== token[0]) continue;
+    if (scoreSubsequenceMatch(field.text.slice(index), token) !== null) {
+      return { score: SUBSEQUENCE, start: index, end: index + 1 };
+    }
+    return null;
+  }
+  return null;
 }
 
 interface WeightedSearchField {
@@ -259,10 +285,12 @@ function matchSearchFields(
     let atWordStart = false;
     for (const { field, weight } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
-      const match = matchToken(field, token, options?.typos ?? false);
+      const typos = options?.typos ?? false;
+      // Spread-out letters only count in the name, where they read as initials.
+      const match = matchToken(field, token, typos, typos && field === primary);
       if (match === null) continue;
       if (field === primary) bestPrimary = match;
-      if (match.score > TYPO) atWordStart = true;
+      if (match.score >= 0.7) atWordStart = true;
       if (match.score * weight > best) best = match.score * weight;
     }
     if (best === 0) return null;
@@ -340,7 +368,7 @@ export function firstSearchTokenOffset(text: string, query: string): number {
  * snippet. Snippets vary per query, so they skip the field cache.
  */
 export function findSearchTokenRanges(text: string, query: string): SearchRange[] {
-  const tokens = new Set(messageSearchTokens(query).long.map(normalizeSearchQuery));
+  const tokens = new Set(messageSearchTokens(query).long.map(foldSearchQuery));
   if (tokens.size === 0) return [];
   const field = foldSearchField(text);
   const ranges: SearchRange[] = [];
@@ -414,7 +442,7 @@ export function recordThreadOpen(
   at: number,
   query: string | undefined,
 ): ThreadOpenStats {
-  const pick = normalizeSearchQuery(query ?? "")
+  const pick = foldSearchQuery(query ?? "")
     .slice(0, THREAD_SEARCH_PICK_MAX_LENGTH)
     .trim();
   const queries = pick
@@ -436,6 +464,8 @@ export interface ThreadSearchSubject {
   readonly title: string;
   readonly branch?: string | null;
   readonly projectTitle?: string | null;
+  /** Only set with two or more environments; it tells same-named threads apart. */
+  readonly environmentLabel?: string | null;
   readonly pullRequests?: ReadonlyArray<{
     readonly number: number;
     readonly title?: string | null;
@@ -447,21 +477,27 @@ export interface ThreadSearchSubject {
   readonly opens?: ThreadOpenStats | null;
 }
 
+// Use reorders matches of about the same quality but never turns a mid-word
+// hit on a busy thread into a better result than a whole word on a quiet one.
+const USE_BOOST_LIMIT = 2.5;
+
 /**
  * How much use lifts a thread: 1 for a stale, never-opened thread, about 2 for
- * one active today, and more for threads opened often.
+ * one active today, and up to 2.5 for threads opened often.
  */
 function threadUsageBoost(thread: ThreadSearchSubject, now: number): number {
   const recency = thread.activityAt === null ? 0 : decay(now - thread.activityAt);
   const opens = thread.opens ? thread.opens.score * decay(now - thread.opens.openedAt) : 0;
-  return 1 + recency + 0.5 * Math.log2(1 + opens);
+  return Math.min(USE_BOOST_LIMIT, 1 + recency + 0.5 * Math.log2(1 + opens));
 }
 
 const REFERENCE_PREFIX_MIN = 8;
 
 // IDs and URLs split into many word starts, so matching them as fields would
-// let a two-letter query hit every thread. Only a pasted value, or a long
-// prefix of one, matches. Both are ASCII, so lowercasing is enough.
+// let a two-letter query hit every thread. Only a long piece of one matches: a
+// prefix, or, when it holds a digit like an ID or pull request number, any
+// part ("t3code#22889", a URL without its scheme). Both are ASCII, so
+// lowercasing is enough.
 function matchReference(
   normalizedQuery: string,
   thread: ThreadSearchSubject,
@@ -471,7 +507,11 @@ function matchReference(
     ...(thread.id ? [thread.id] : []),
     ...(thread.pullRequests ?? []).flatMap((pullRequest) => pullRequest.references ?? []),
   ];
-  return references.some((reference) => reference.toLowerCase().startsWith(normalizedQuery))
+  const anywhere = DIGIT.test(normalizedQuery);
+  return references.some((reference) => {
+    const folded = reference.toLowerCase();
+    return anywhere ? folded.includes(normalizedQuery) : folded.startsWith(normalizedQuery);
+  })
     ? { quality: 0.6, strong: true, primaryRanges: [] }
     : null;
 }
@@ -480,8 +520,8 @@ function matchReference(
 // but unused match. It fades with the thread's last open, so old picks let go.
 const PICK_BOOST = 3;
 // A remembered pick alone lists its thread (one picked through a message
-// match, say), but a single letter is too little to go on.
-const PICK_ONLY_MIN_LENGTH = 2;
+// match, say), but two letters are too little to go on.
+const PICK_ONLY_MIN_LENGTH = 3;
 
 function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: number): number {
   const { opens } = thread;
@@ -503,7 +543,7 @@ export interface ThreadSearchMatch {
 /**
  * Scores a thread for a normalized query, or null when it does not match.
  * Titles and pull request numbers count fully, pull request titles and
- * branches less, project names least.
+ * branches less, project and environment names least.
  */
 export function scoreThreadSearch(
   normalizedQuery: string,
@@ -518,6 +558,7 @@ export function scoreThreadSearch(
   }
   if (thread.branch) fields.push({ value: thread.branch, weight: 0.6 });
   if (thread.projectTitle) fields.push({ value: thread.projectTitle, weight: 0.45 });
+  if (thread.environmentLabel) fields.push({ value: thread.environmentLabel, weight: 0.45 });
   const boost = pickBoost(thread, normalizedQuery, now);
   const match =
     matchSearchFields(normalizedQuery.replace(/^#/, ""), fields, options) ??
@@ -555,6 +596,12 @@ export function rankMessageMatches<T extends { readonly rank: number }>(
     .sort((left, right) => right.score - left.score)
     .map(({ match }) => match);
 }
+
+/** Palette limits shared by web and mobile. */
+export const PALETTE_THREAD_LIMIT = 20;
+export const PALETTE_MESSAGE_LIMIT = 10;
+/** Next to matching threads, other groups show only their best few rows. */
+export const PALETTE_SECONDARY_LIMIT = 3;
 
 // Every token at a word start of a main field (0.7 and up), or weaker. Whole
 // word against prefix is too fine a line for group order: "compact" must not

@@ -21,7 +21,8 @@ import {
   type EnvironmentThreadSearchMatch,
   type SettledThreadSearch,
 } from "@t3tools/client-runtime/state/thread-search";
-import { messageSearchTokens } from "@t3tools/shared/searchRank";
+import { THREAD_SEARCH_QUERY_MAX_LENGTH } from "@t3tools/contracts";
+import { messageSearchTokens } from "@t3tools/shared/paletteSearch";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
@@ -169,7 +170,8 @@ export function useThreadSearch(
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   readonly isPending: boolean;
 } {
-  const normalizedQuery = query.trim();
+  // A pasted wall of text searches by its start rather than failing the request.
+  const normalizedQuery = query.trim().slice(0, THREAD_SEARCH_QUERY_MAX_LENGTH).trim();
   const debouncedQuery = useDebouncedValue(normalizedQuery, THREAD_SEARCH_DEBOUNCE_MS);
   // The server needs a word of three or more letters; shorter queries would always come back empty.
   const canSearch =

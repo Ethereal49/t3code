@@ -1,12 +1,15 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
-  normalizeSearchQuery,
+  foldSearchQuery,
+  PALETTE_MESSAGE_LIMIT,
+  PALETTE_SECONDARY_LIMIT,
+  PALETTE_THREAD_LIMIT,
   rankSearchGroups,
   scoreSearchTerms,
   scoreThreadSearch,
   type SearchRange,
   type ThreadSearchSubject,
-} from "@t3tools/shared/searchRank";
+} from "@t3tools/shared/paletteSearch";
 
 export interface CommandPaletteItem {
   readonly key: string;
@@ -27,11 +30,6 @@ export interface CommandPaletteResult extends CommandPaletteItem {
   readonly titleRanges?: ReadonlyArray<SearchRange>;
 }
 
-const THREAD_RESULT_LIMIT = 20;
-const MESSAGE_RESULT_LIMIT = 10;
-// Same limit as the web palette.
-const SECONDARY_GROUP_LIMIT = 3;
-
 /**
  * Ranks like the web palette: actions, projects, and threads order by their
  * best match, threads by match quality and use. Threads whose messages match
@@ -45,7 +43,7 @@ export function filterCommandPaletteItems(
   now = Date.now(),
 ): CommandPaletteResult[] {
   const actionsOnly = query.startsWith(">");
-  const normalizedQuery = normalizeSearchQuery(actionsOnly ? query.slice(1) : query);
+  const normalizedQuery = foldSearchQuery(actionsOnly ? query.slice(1) : query);
   const candidates = actionsOnly ? items.filter((item) => item.kind === "action") : items;
   if (!normalizedQuery) return candidates.filter((item) => item.kind !== "project");
 
@@ -67,9 +65,9 @@ export function filterCommandPaletteItems(
       .slice(
         0,
         group === "thread"
-          ? THREAD_RESULT_LIMIT
+          ? PALETTE_THREAD_LIMIT
           : threadsMatch && !actionsOnly
-            ? SECONDARY_GROUP_LIMIT
+            ? PALETTE_SECONDARY_LIMIT
             : entries.length,
       )
       .map(({ item, match }): CommandPaletteResult => ({ ...item, titleRanges: match.ranges })),
@@ -85,7 +83,7 @@ export function filterCommandPaletteItems(
       const item = threadByKey.get(key);
       return item && !listed.has(key) ? [{ ...item, fromMessages: true }] : [];
     })
-    .slice(0, MESSAGE_RESULT_LIMIT);
+    .slice(0, PALETTE_MESSAGE_LIMIT);
   return [...ranked, ...fromMessages];
 }
 

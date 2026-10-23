@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   findSearchTokenRanges,
-  normalizeSearchQuery,
+  foldSearchQuery,
   rankMessageMatches,
   rankSearchGroups,
   rankSearchItems,
@@ -11,7 +11,7 @@ import {
   scoreThreadSearch,
   SEARCH_RECENCY_HALF_LIFE_MS,
   type ThreadSearchSubject,
-} from "./searchRank.ts";
+} from "./paletteSearch.ts";
 
 const NOW = Date.UTC(2026, 9, 23);
 const DAY = 24 * 60 * 60 * 1000;
@@ -21,7 +21,7 @@ function thread(title: string, overrides: Partial<ThreadSearchSubject> = {}): Th
 }
 
 function rankTitles(query: string, threads: ReadonlyArray<ThreadSearchSubject>): string[] {
-  const normalized = normalizeSearchQuery(query);
+  const normalized = foldSearchQuery(query);
   return rankSearchItems(threads, (subject, options) =>
     scoreThreadSearch(normalized, subject, NOW, options),
   ).map(({ item }) => item.title);
@@ -94,7 +94,7 @@ describe("scoreThreadSearch", () => {
       pullRequests: [{ number: 22889, title: "Smaller MCP payloads" }],
     });
     for (const query of ["#22889", "22889", "trim mcp", "payloads t3code", "models trim"]) {
-      expect(scoreThreadSearch(normalizeSearchQuery(query), subject, NOW), query).not.toBeNull();
+      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW), query).not.toBeNull();
     }
     expect(scoreThreadSearch("trim lakebed", subject, NOW)).toBeNull();
   });
@@ -131,7 +131,48 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       opens: { openedAt: NOW - DAY, score: 1, queries: ["tigris"] },
     });
     expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
-    expect(rankTitles("t", [picked])).toEqual([]);
+    expect(rankTitles("ti", [picked])).toEqual([]);
+  });
+});
+
+describe("scoreThreadSearch with heavy use and loose input", () => {
+  it("keeps a whole word on a quiet thread above a mid-word hit on a thread opened daily", () => {
+    let opens = recordThreadOpen(null, NOW - 60 * DAY, undefined);
+    for (let day = 59; day >= 1; day--) opens = recordThreadOpen(opens, NOW - day * DAY, undefined);
+    expect(
+      rankTitles("auth", [
+        thread("Fix oauth redirect", { activityAt: NOW, opens }),
+        thread("Share auth across worktrees", { activityAt: NOW - 90 * DAY }),
+      ]),
+    ).toEqual(["Share auth across worktrees", "Fix oauth redirect"]);
+  });
+
+  it("matches spread-out letters as a last resort", () => {
+    expect(rankTitles("fxsb", [thread("Fix sidebar lag"), thread("Unrelated work")])).toEqual([
+      "Fix sidebar lag",
+    ]);
+  });
+
+  it("matches pieces of references that hold a number, and environment names", () => {
+    const subject = thread("Trim model lists", {
+      id: "thread-5fe6f59c-4976",
+      environmentLabel: "BeeBox",
+      pullRequests: [
+        {
+          number: 22889,
+          references: ["pingdotgg/t3code#22889", "https://github.com/pingdotgg/t3code/pull/22889"],
+        },
+      ],
+    });
+    for (const query of [
+      "t3code#22889",
+      "github.com/pingdotgg/t3code/pull/22889",
+      "5fe6f59c",
+      "beebox",
+    ]) {
+      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW), query).not.toBeNull();
+    }
+    expect(scoreThreadSearch("github.com", subject, NOW)).toBeNull();
   });
 });
 

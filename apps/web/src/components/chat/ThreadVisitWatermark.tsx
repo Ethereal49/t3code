@@ -1,7 +1,7 @@
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/searchRank";
+import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/paletteSearch";
 import { useEffect, useRef } from "react";
 import { useUiStateStore } from "../../uiStateStore";
 import { threadEnvironment } from "../../state/threads";

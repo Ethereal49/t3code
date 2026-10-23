@@ -2,7 +2,7 @@ import {
   findSearchTokenRanges,
   splitSearchText,
   type SearchRange,
-} from "@t3tools/shared/searchRank";
+} from "@t3tools/shared/paletteSearch";
 
 /** `text` with each range in semibold foreground. */
 export function HighlightedSearchText(props: { text: string; ranges: ReadonlyArray<SearchRange> }) {

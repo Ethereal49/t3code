@@ -7,7 +7,7 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { normalizeSearchQuery, type ThreadSearchSubject } from "@t3tools/shared/searchRank";
+import { foldSearchQuery, type ThreadSearchSubject } from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import type { EnvironmentThreadShell } from "./models.ts";
@@ -93,10 +93,14 @@ export type ThreadSearchShell = Pick<
 > &
   Partial<Pick<EnvironmentThreadShell, "pullRequests" | "linkedPullRequest" | "branchPullRequest">>;
 
-/** What the web and mobile palettes rank a thread shell by. */
+/**
+ * What the web and mobile palettes rank a thread shell by. Pass the
+ * environment label only when there are two or more environments.
+ */
 export function threadSearchSubject(
   thread: ThreadSearchShell,
   projectTitle: string | null | undefined,
+  environmentLabel?: string | null,
 ): ThreadSearchSubject {
   const activityAt = getThreadSortTimestamp(thread, "updated_at");
   return {
@@ -104,6 +108,7 @@ export function threadSearchSubject(
     title: thread.title,
     branch: thread.branch,
     projectTitle: projectTitle ?? null,
+    environmentLabel: environmentLabel ?? null,
     pullRequests: threadSearchPullRequests(thread),
     activityAt: Number.isFinite(activityAt) ? activityAt : null,
     opens: thread.opens ? { ...thread.opens, openedAt: Date.parse(thread.opens.openedAt) } : null,
@@ -127,8 +132,8 @@ export function visibleThreadSearch(
   previous: SettledThreadSearch | null,
 ): SettledThreadSearch {
   if (ready !== null) return ready;
-  const current = normalizeSearchQuery(query);
-  const before = normalizeSearchQuery(previous?.query ?? "");
+  const current = foldSearchQuery(query);
+  const before = foldSearchQuery(previous?.query ?? "");
   return previous !== null &&
     current.length > 0 &&
     before.length > 0 &&
