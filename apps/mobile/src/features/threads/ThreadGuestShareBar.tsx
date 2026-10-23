@@ -55,6 +55,8 @@ export function ThreadGuestShareBar(props: {
   );
   // One request at a time: a second tap while the first is in flight would double-send.
   const [busy, setBusy] = useState(false);
+  // Checked when the thread opens; an expired link stays listed until the owner stops sharing.
+  const [openedAt] = useState(Date.now);
   if (threadRef === null || !share) return null;
 
   const guestName = share.guestName ?? "Guest";
@@ -108,7 +110,7 @@ export function ThreadGuestShareBar(props: {
       <View className="flex-row items-center gap-2 px-4">
         <SymbolView name="person.2" size={12} tintColorClassName="accent-foreground-muted" />
         <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-          {isGuestShareExpired(share, Date.now())
+          {isGuestShareExpired(share, openedAt)
             ? "Guest link expired"
             : share.guestName === null
               ? "Guest link active"

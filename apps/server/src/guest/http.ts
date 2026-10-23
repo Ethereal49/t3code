@@ -57,7 +57,7 @@ const redeemRoute = HttpRouter.add(
           }),
         ),
       ),
-      Effect.catchTag("GuestShareAccessError", errorResponse),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
   }),
 );
@@ -72,7 +72,7 @@ const submitRoute = HttpRouter.add(
     const guestShares = yield* GuestShareService;
     return yield* guestShares.submit(yield* sessionToken, body.value).pipe(
       Effect.flatMap(() => Effect.succeed(HttpServerResponse.empty({ status: 204 }))),
-      Effect.catchTag("GuestShareAccessError", errorResponse),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
   }),
 );
@@ -95,7 +95,7 @@ const streamRoute = HttpRouter.add(
           },
         );
       }),
-      Effect.catchTag("GuestShareAccessError", errorResponse),
+      Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
   }),
 );
