@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   findSearchTokenRanges,
   foldSearchQuery,
+  pickedQuery,
   rankMessageMatches,
   rankSearchGroups,
   rankSearchItems,
@@ -151,6 +152,12 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       ranges: [{ start: 3, end: 10 }],
     });
     expect(scoreThreadSearch("trim", subject, NOW)?.hint).toBeUndefined();
+    // Split across fields, the hint shows the first field with some of the words.
+    expect(scoreThreadSearch("cleanup smaller", subject, NOW)?.hint).toEqual({
+      label: "PR",
+      text: "#22889 Smaller MCP payloads",
+      ranges: [{ start: 7, end: 14 }],
+    });
     // A long hint starts near the match, so one line shows it.
     const long = thread("Wave 1F", {
       pullRequests: [{ number: 15033, title: "perf: cheaper shell refreshes, fewer MCP payloads" }],
@@ -162,6 +169,24 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     });
     // The words only drop out next to a linked number.
     expect(scoreThreadSearch("pr 12345", subject, NOW)).toBeNull();
+  });
+
+  it("reads letters and numbers typed together, without forgiving typos in numbers", () => {
+    const threads = [
+      thread("Upgrade to pnpm 12"),
+      thread("GPT-5 eval"),
+      thread("iOS 26 support"),
+      thread("Other"),
+    ];
+    expect(rankTitles("pnpm12", threads)).toEqual(["Upgrade to pnpm 12"]);
+    expect(rankTitles("gpt5", threads)).toEqual(["GPT-5 eval"]);
+    expect(rankTitles("ios26", threads)).toEqual(["iOS 26 support"]);
+    expect(rankTitles("pnpm13", threads)).toEqual([]);
+  });
+
+  it("stores picked queries without splitting an emoji", () => {
+    expect(pickedQuery(`${"a".repeat(31)}🚀`)).toBe("a".repeat(31));
+    expect(pickedQuery("  Upl ")).toBe("Upl");
   });
 
   it("matches emoji in titles", () => {

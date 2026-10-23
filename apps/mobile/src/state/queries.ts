@@ -168,6 +168,8 @@ export function useThreadSearch(
   query: string,
 ): {
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+  /** The query `matches` are for, which lags the typed one while a search runs. */
+  readonly query: string;
   readonly isPending: boolean;
 } {
   // A pasted wall of text searches by its start rather than failing the request.
@@ -196,6 +198,7 @@ export function useThreadSearch(
     : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES };
   return {
     matches: visible.matches,
+    query: visible.query,
     isPending,
   };
 }

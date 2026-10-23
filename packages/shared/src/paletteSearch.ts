@@ -202,24 +202,28 @@ function matchToken(
       best = { score: MID_WORD, start: index, end: index + token.length };
     }
   }
-  if ((best !== null && best.score > MID_WORD) || !typos || token.length < 3 || DIGIT.test(token)) {
-    return best;
-  }
-  for (let index = 0; index < field.text.length; index++) {
-    if (!field.wordStarts[index]) continue;
-    const word = field.text.slice(index, wordEnd(field, index));
-    // Short tokens only forgive a swapped pair: any other edit of a three- or
-    // four-letter word matches too much ("cron" would find every "con…").
-    const swapOnly = token.length <= 4;
-    const lengths = swapOnly ? [token.length] : [token.length - 1, token.length, token.length + 1];
-    // People rarely mistype the first letter, so a typo keeps it, unless it swaps the first two.
-    const firstLetterKept = word[0] === token[0] || (word[0] === token[1] && word[1] === token[0]);
-    if (!firstLetterKept) continue;
-    for (const length of lengths) {
-      if (length > word.length) continue;
-      const prefix = word.slice(0, length);
-      if (swapOnly ? isSwap(token, prefix) : withinOneEdit(token, prefix)) {
-        return { score: TYPO, start: index, end: index + length };
+  if ((best !== null && best.score > MID_WORD) || !typos || token.length < 3) return best;
+  // Numbers skip typos (22889 is not 22189) but keep initials: "pnpm12" is "pnpm 12".
+  if (!DIGIT.test(token)) {
+    for (let index = 0; index < field.text.length; index++) {
+      if (!field.wordStarts[index]) continue;
+      const word = field.text.slice(index, wordEnd(field, index));
+      // Short tokens only forgive a swapped pair: any other edit of a three- or
+      // four-letter word matches too much ("cron" would find every "con…").
+      const swapOnly = token.length <= 4;
+      const lengths = swapOnly
+        ? [token.length]
+        : [token.length - 1, token.length, token.length + 1];
+      // People rarely mistype the first letter, so a typo keeps it, unless it swaps the first two.
+      const firstLetterKept =
+        word[0] === token[0] || (word[0] === token[1] && word[1] === token[0]);
+      if (!firstLetterKept) continue;
+      for (const length of lengths) {
+        if (length > word.length) continue;
+        const prefix = word.slice(0, length);
+        if (swapOnly ? isSwap(token, prefix) : withinOneEdit(token, prefix)) {
+          return { score: TYPO, start: index, end: index + length };
+        }
       }
     }
   }
@@ -234,7 +238,7 @@ function matchToken(
  * "creation"). Weakest match, tried last.
  */
 function matchInitials(field: SearchField, token: string): TokenMatch | null {
-  if (token.length < 3 || DIGIT.test(token)) return null;
+  if (token.length < 3 || /^\p{N}+$/u.test(token)) return null;
   const nextWordStart = (from: number, letter: string) => {
     for (let index = from; index < field.text.length; index++) {
       if (field.wordStarts[index] && field.text[index] === letter) return index;
@@ -252,7 +256,11 @@ function matchInitials(field: SearchField, token: string): TokenMatch | null {
       // more letters ("fix" in "fixsid"). Anything else is a coincidence:
       // "lint" is not "Lin(k) t(hread)" or "l(akebed) in t(he)".
       const run = after - runStart;
-      if (at !== after && run > 1 && (run < 3 || after !== wordEnd(field, runStart))) return null;
+      const endsWord =
+        after === field.text.length ||
+        field.wordStarts[after] === 1 ||
+        !ALPHANUMERIC.test(field.text[after]!);
+      if (at !== after && run > 1 && (run < 3 || !endsWord)) return null;
       if (at !== after) runStart = at;
       letters.push({ start: at, end: at + 1 });
     }
@@ -555,7 +563,13 @@ export const SEARCH_RECENCY_HALF_LIFE_MS = 14 * DAY_MS;
 export const THREAD_OPEN_DEDUPE_MS = 10 * 60 * 1000;
 const THREAD_SEARCH_PICK_LIMIT = 3;
 /** Picked queries are stored this long; clients send no more. */
-export const THREAD_SEARCH_PICK_MAX_LENGTH = 32;
+const THREAD_SEARCH_PICK_MAX_LENGTH = 32;
+
+/** `query` cut to the stored pick length without splitting an emoji in two. */
+export function pickedQuery(query: string): string {
+  const cut = query.trim().slice(0, THREAD_SEARCH_PICK_MAX_LENGTH);
+  return (/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut).trim();
+}
 
 function decay(ageMs: number): number {
   return 2 ** (-Math.max(0, ageMs) / SEARCH_RECENCY_HALF_LIFE_MS);
@@ -573,9 +587,7 @@ export function recordThreadOpen(
   at: number,
   query: string | undefined,
 ): ThreadOpenStats {
-  const pick = foldSearchQuery(query ?? "")
-    .slice(0, THREAD_SEARCH_PICK_MAX_LENGTH)
-    .trim();
+  const pick = pickedQuery(foldSearchQuery(query ?? ""));
   const queries = pick
     ? [pick, ...(previous?.queries ?? []).filter((existing) => existing !== pick)].slice(
         0,
@@ -717,10 +729,21 @@ function matchHint(
     { label: "Project", text: thread.projectTitle },
     { label: "Environment", text: thread.environmentLabel },
   ];
+  const rangesIn = (text: string, query: string) =>
+    matchSearchFields(query, [{ value: text, weight: 1 }], { typos })?.primaryRanges;
+  for (const { label, text } of candidates) {
+    const ranges = text ? rangesIn(text, normalizedQuery) : undefined;
+    if (text && ranges) return hintNearMatch(label, text, ranges);
+  }
+  // A query split across fields ("cleanup payloads" in a branch and a PR
+  // title): the first field that holds some of its words.
+  const tokens = normalizedQuery.split(" ");
+  if (tokens.length === 1) return undefined;
   for (const { label, text } of candidates) {
     if (!text) continue;
-    const match = matchSearchFields(normalizedQuery, [{ value: text, weight: 1 }], { typos });
-    if (match) return hintNearMatch(label, text, match.primaryRanges);
+    const present = tokens.filter((token) => rangesIn(text, token));
+    const ranges = present.length > 0 ? rangesIn(text, present.join(" ")) : undefined;
+    if (ranges) return hintNearMatch(label, text, ranges);
   }
   return undefined;
 }

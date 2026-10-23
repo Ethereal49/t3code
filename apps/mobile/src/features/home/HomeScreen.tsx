@@ -668,7 +668,7 @@ export function HomeScreen(props: HomeScreenProps) {
             threadId: thread.id,
           }),
         )}
-        searchQuery={props.searchQuery}
+        searchQuery={threadSearch.query}
         onSelectThread={props.onSelectThread}
         onOpenThreadPullRequests={handleOpenThreadPullRequests}
         onDeleteThread={handleDeleteThread}

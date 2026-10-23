@@ -10,7 +10,7 @@ import {
   foldSearchQuery,
   rankMessageMatches,
   splitSearchText,
-  THREAD_SEARCH_PICK_MAX_LENGTH,
+  pickedQuery,
   threadRecentUse,
 } from "@t3tools/shared/paletteSearch";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -457,7 +457,7 @@ export function CommandPalette(props: {
           threadId: thread.id,
           visitedAt: thread.updatedAt,
           opened: true,
-          searchQuery: query.trim().slice(0, THREAD_SEARCH_PICK_MAX_LENGTH),
+          searchQuery: pickedQuery(query),
         },
       });
     }
@@ -617,7 +617,7 @@ export function CommandPalette(props: {
                       index={index}
                       selected={item.key === selectedKey}
                       searchMatch={item.fromMessages ? contentMatchByKey.get(item.key) : undefined}
-                      searchQuery={query}
+                      searchQuery={search.query}
                       onSelect={() => close(() => runResult(item))}
                     />
                   </>

@@ -635,7 +635,7 @@ function ThreadNavigationSidebarPane(
                 threadId: thread.id,
               }),
             )}
-            searchQuery={props.searchQuery}
+            searchQuery={threadSearch.query}
             pane="sidebar"
             selected={
               !activeNewTask &&
