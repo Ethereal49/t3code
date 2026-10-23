@@ -1,7 +1,6 @@
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { takeThreadSearchPick } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/searchRank";
 import { useEffect, useRef } from "react";
 import { useUiStateStore } from "../../uiStateStore";
@@ -29,27 +28,20 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
   const lastVisitDispatchAtRef = useRef(0);
   const recordedOpenRef = useRef<string | null>(null);
 
-  // Opening a thread is one visit that also counts toward search ranking, with
-  // the palette query that picked it. It runs before the watermark effect,
-  // which then sees this watermark as already sent.
+  // Opening a thread is one visit that also counts toward search ranking. It
+  // runs before the watermark effect, which then sees this watermark as sent.
   useEffect(() => {
     if (!serverThread?.id || serverThread.lastVisitedAt === undefined) return;
     if (recordedOpenRef.current === threadKey) return;
     recordedOpenRef.current = threadKey;
-    const searchQuery = takeThreadSearchPick(threadKey);
     const openedAt = serverThread.opens ? Date.parse(serverThread.opens.openedAt) : NaN;
     // The server would merge it into the last open anyway.
-    if (!searchQuery && Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
+    if (Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
     lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
     lastVisitDispatchAtRef.current = Date.now();
     void visitThreadMutation({
       environmentId: serverThread.environmentId,
-      input: {
-        threadId: serverThread.id,
-        visitedAt: serverThread.updatedAt,
-        opened: true,
-        ...(searchQuery ? { searchQuery } : {}),
-      },
+      input: { threadId: serverThread.id, visitedAt: serverThread.updatedAt, opened: true },
     });
   }, [
     threadKey,

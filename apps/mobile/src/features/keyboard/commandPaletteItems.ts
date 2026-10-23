@@ -29,6 +29,9 @@ export interface CommandPaletteResult extends CommandPaletteItem {
 
 const THREAD_RESULT_LIMIT = 20;
 const MESSAGE_RESULT_LIMIT = 10;
+// Same weighting and limits as the web palette.
+const ACTION_WEIGHT = 2;
+const SECONDARY_GROUP_LIMIT = 3;
 
 /**
  * Ranks like the web palette: actions, projects, and threads order by their
@@ -49,19 +52,31 @@ export function filterCommandPaletteItems(
 
   // On equal best matches, groups keep this order: threads are what people search for most.
   const kinds = ["action", "thread", "project"] as const;
-  const ranked = rankSearchGroups(
+  const groups = rankSearchGroups(
     kinds.map((kind) => ({ group: kind, items: candidates.filter((item) => item.kind === kind) })),
-    (item, options) => {
+    (item, options, kind) => {
       if (!item.threadSearch) {
-        return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
+        return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], {
+          ...options,
+          weight: kind === "action" && !actionsOnly ? ACTION_WEIGHT : 1,
+        });
       }
       const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
       return match && { ...match, ranges: match.titleRanges };
     },
-  ).flatMap(({ group, ranked: entries }) =>
-    (group === "thread" ? entries.slice(0, THREAD_RESULT_LIMIT) : entries).map(
-      ({ item, match }): CommandPaletteResult => ({ ...item, titleRanges: match.ranges }),
-    ),
+  );
+  const threadsMatch = groups.some(({ group }) => group === "thread");
+  const ranked = groups.flatMap(({ group, ranked: entries }) =>
+    entries
+      .slice(
+        0,
+        group === "thread"
+          ? THREAD_RESULT_LIMIT
+          : threadsMatch && !actionsOnly
+            ? SECONDARY_GROUP_LIMIT
+            : entries.length,
+      )
+      .map(({ item, match }): CommandPaletteResult => ({ ...item, titleRanges: match.ranges })),
   );
   if (actionsOnly) return ranked;
 

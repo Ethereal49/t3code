@@ -110,20 +110,6 @@ export function threadSearchSubject(
   };
 }
 
-let pendingSearchPick: { readonly threadKey: string; readonly query: string } | null = null;
-
-/** The palette notes the query that picked a thread just before it navigates there. */
-export function rememberThreadSearchPick(threadKey: string, query: string): void {
-  pendingSearchPick = { threadKey, query };
-}
-
-/** The thread view takes it once, when it records the open of that thread. */
-export function takeThreadSearchPick(threadKey: string): string | undefined {
-  const pick = pendingSearchPick;
-  pendingSearchPick = null;
-  return pick?.threadKey === threadKey ? pick.query : undefined;
-}
-
 export interface SettledThreadSearch {
   readonly query: string;
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;

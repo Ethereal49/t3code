@@ -16,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
+  messageSearchTokens,
   normalizeSearchQuery,
   rankMessageMatches,
   rankSearchItems,
@@ -50,10 +51,6 @@ const SearchRow = Schema.Struct({
   messageCreatedAt: Schema.NullOr(IsoDateTime),
 });
 
-// The trigram index cannot match tokens shorter than three characters. They
-// only narrow the indexed matches ("pnpm 12"); alone, a two-letter substring
-// of a message is noise rather than a match.
-const MIN_TOKEN_LENGTH = 3;
 const SNIPPET_LENGTH = 240;
 
 /**
@@ -63,12 +60,11 @@ const SNIPPET_LENGTH = 240;
 function buildMessageSearch(
   query: string,
 ): { readonly match: string; readonly shortTokens: ReadonlyArray<string> } | null {
-  const tokens = normalizeSearchQuery(query).split(" ");
-  const long = tokens.filter((token) => [...token].length >= MIN_TOKEN_LENGTH);
+  const { long, short } = messageSearchTokens(normalizeSearchQuery(query));
   if (long.length === 0) return null;
   return {
     match: long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" "),
-    shortTokens: tokens.filter((token) => token.length > 0 && !long.includes(token)),
+    shortTokens: short,
   };
 }
 
@@ -83,10 +79,8 @@ const SNIPPET_LEAD = 24;
 export function buildSearchSnippet(text: string, query: string): string {
   const normalizedText = text.replace(/\s+/g, " ").trim();
   const lowerText = normalizedText.toLowerCase();
-  const matchStarts = normalizeSearchQuery(query)
-    .split(" ")
-    .filter((token) => token.length >= MIN_TOKEN_LENGTH)
-    .map((token) => lowerText.indexOf(token))
+  const matchStarts = messageSearchTokens(normalizeSearchQuery(query))
+    .long.map((token) => lowerText.indexOf(token))
     .filter((index) => index !== -1);
   const matchStart = matchStarts.length === 0 ? 0 : Math.min(...matchStarts);
   if (normalizedText.length <= SNIPPET_LENGTH && matchStart <= SNIPPET_LEAD * 2) {

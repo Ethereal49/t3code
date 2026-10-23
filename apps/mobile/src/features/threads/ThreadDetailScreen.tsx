@@ -131,7 +131,6 @@ import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { takeThreadSearchPick } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_OPEN_DEDUPE_MS } from "@t3tools/shared/searchRank";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
@@ -406,28 +405,22 @@ function ThreadVisitWatermark(props: {
   const wakeIsLatestUpdate = selectedThreadUpdatedAt === selectedThreadWokeAt;
   const selectedThreadLastVisitedAt = thread.lastVisitedAt;
   const selectedThreadCompletedAt = thread.latestRun?.completedAt;
-  // Opening a thread is one visit that also counts toward search ranking, with
-  // the palette query that picked it; the watermark effect below then skips it.
+  // Opening a thread is one visit that also counts toward search ranking; the
+  // watermark effect below then skips it.
   const recordedOpenRef = useRef<string | null>(null);
   const selectedThreadOpenedAt = thread.opens?.openedAt;
   useEffect(() => {
     if (!showContent || selectedThreadLastVisitedAt === undefined) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
-    const searchQuery = takeThreadSearchPick(selectedThreadKey);
     const openedAt = selectedThreadOpenedAt ? Date.parse(selectedThreadOpenedAt) : NaN;
     // The server would merge it into the last open anyway.
-    if (!searchQuery && Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
+    if (Date.now() - openedAt < THREAD_OPEN_DEDUPE_MS) return;
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
     void visitThread({
       environmentId: props.environmentId,
-      input: {
-        threadId: selectedThreadId,
-        visitedAt: selectedThreadUpdatedAt,
-        opened: true,
-        ...(searchQuery ? { searchQuery } : {}),
-      },
+      input: { threadId: selectedThreadId, visitedAt: selectedThreadUpdatedAt, opened: true },
     });
   }, [
     props.environmentId,

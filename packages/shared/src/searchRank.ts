@@ -247,6 +247,25 @@ function matchSearchFields(
   return { quality, primaryRanges: primary ? toSourceRanges(primary, primaryRanges) : [] };
 }
 
+// The server's trigram index cannot match shorter tokens, and a two-letter
+// substring of a message is noise rather than a match.
+const MESSAGE_TOKEN_MIN_LENGTH = 3;
+
+/**
+ * Message search tokens: every `long` one must appear as a substring; `short`
+ * ones only narrow those hits ("pnpm 12"). No long token means no search.
+ */
+export function messageSearchTokens(normalizedQuery: string): {
+  readonly long: ReadonlyArray<string>;
+  readonly short: ReadonlyArray<string>;
+} {
+  const tokens = normalizedQuery.split(" ").filter((token) => token.length > 0);
+  return {
+    long: tokens.filter((token) => [...token].length >= MESSAGE_TOKEN_MIN_LENGTH),
+    short: tokens.filter((token) => [...token].length < MESSAGE_TOKEN_MIN_LENGTH),
+  };
+}
+
 /**
  * Ranges of `text` that contain a query token of three or more characters, for
  * message snippets. Message search matches those tokens as plain substrings
@@ -257,8 +276,7 @@ export function findSearchTokenRanges(text: string, normalizedQuery: string): Se
   if (normalizedQuery.length === 0) return [];
   const field = foldSearchField(text);
   const ranges: SearchRange[] = [];
-  for (const token of new Set(normalizedQuery.split(" "))) {
-    if (token.length < 3) continue;
+  for (const token of new Set(messageSearchTokens(normalizedQuery).long)) {
     for (
       let index = field.text.indexOf(token);
       index !== -1;
@@ -406,8 +424,6 @@ function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: nu
 export interface ThreadSearchMatch {
   /** Match quality times use; what results sort by. */
   readonly score: number;
-  /** Match quality alone, to compare against results that have no use history. */
-  readonly quality: number;
   readonly titleRanges: ReadonlyArray<SearchRange>;
 }
 
@@ -439,7 +455,6 @@ export function scoreThreadSearch(
   if (match === null) return null;
   return {
     score: match.quality * (threadUsageBoost(thread, now) + boost),
-    quality: match.quality,
     titleRanges: match.primaryRanges,
   };
 }
@@ -472,28 +487,25 @@ export interface RankedSearchItem<T, M> {
 }
 
 /**
- * Ranks grouped items, best match first within each group. Groups with no
- * match are dropped, and the rest order by their best match quality, so a
- * strong match in a later group is not stuck under weak ones; ties keep the
- * given order.
+ * Ranks grouped items, best score first within each group. Groups with no
+ * match are dropped, and the rest order by their best score, so the top row is
+ * the best result overall; ties keep the given order. Callers weigh groups
+ * through the score: a thread's score includes its use, so an active thread
+ * outranks a setting that matches about as well.
  *
  * Typos are only tried when nothing matches exactly in any group: next to a
  * correct match, typo matches are noise ("enter" finding "external"), and
  * skipping them keeps a keystroke cheap.
  */
-export function rankSearchGroups<
-  G,
-  T,
-  M extends { readonly score: number; readonly quality: number },
->(
+export function rankSearchGroups<G, T, M extends { readonly score: number }>(
   groups: ReadonlyArray<{ readonly group: G; readonly items: ReadonlyArray<T> }>,
-  score: (item: T, options: { readonly typos: boolean }) => M | null,
+  score: (item: T, options: { readonly typos: boolean }, group: G) => M | null,
 ): Array<{ readonly group: G; readonly ranked: ReadonlyArray<RankedSearchItem<T, M>> }> {
   const rank = (typos: boolean) =>
     groups.map(({ group, items }) => ({
       group,
       ranked: items.flatMap((item) => {
-        const match = score(item, { typos });
+        const match = score(item, { typos }, group);
         return match === null ? [] : [{ item, match }];
       }),
     }));
@@ -503,14 +515,14 @@ export function rankSearchGroups<
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];
       const sorted = [...items].sort((left, right) => right.match.score - left.match.score);
-      return [{ group, ranked: sorted, best: sorted[0]!.match.quality, order }];
+      return [{ group, ranked: sorted, best: sorted[0]!.match.score, order }];
     })
     .sort((left, right) => right.best - left.best || left.order - right.order)
     .map(({ group, ranked: items }) => ({ group, ranked: items }));
 }
 
 /** `rankSearchGroups` for a single list. */
-export function rankSearchItems<T, M extends { readonly score: number; readonly quality: number }>(
+export function rankSearchItems<T, M extends { readonly score: number }>(
   items: ReadonlyArray<T>,
   score: (item: T, options: { readonly typos: boolean }) => M | null,
 ): ReadonlyArray<RankedSearchItem<T, M>> {
@@ -519,23 +531,28 @@ export function rankSearchItems<T, M extends { readonly score: number; readonly 
 
 export interface SearchTermsMatch {
   readonly score: number;
-  readonly quality: number;
   readonly ranges: ReadonlyArray<SearchRange>;
 }
 
+// Below this, keywords match too much: "co" or "pro" would list most settings.
+const KEYWORD_QUERY_MIN_LENGTH = 4;
+
 /**
  * Scores a non-thread result such as a command or project. The first term
- * names it; the others are keywords that help it match but count less.
+ * names it; the others are keywords that help it match but count less, and
+ * only for queries of four or more characters. `weight` scales the score
+ * against other groups.
  */
 export function scoreSearchTerms(
   normalizedQuery: string,
   terms: ReadonlyArray<string>,
-  options?: { readonly typos?: boolean },
+  options?: { readonly typos?: boolean; readonly weight?: number },
 ): SearchTermsMatch | null {
+  const fields = normalizedQuery.length < KEYWORD_QUERY_MIN_LENGTH ? terms.slice(0, 1) : terms;
   const match = matchSearchFields(
     normalizedQuery,
-    terms.map((value, index) => ({ value, weight: index === 0 ? 1 : 0.6 })),
+    fields.map((value, index) => ({ value, weight: index === 0 ? 1 : 0.6 })),
     options,
   );
-  return match && { score: match.quality, quality: match.quality, ranges: match.primaryRanges };
+  return match && { score: match.quality * (options?.weight ?? 1), ranges: match.primaryRanges };
 }

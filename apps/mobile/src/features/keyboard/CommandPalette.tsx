@@ -1,7 +1,6 @@
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
-  rememberThreadSearchPick,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -407,27 +406,25 @@ export function CommandPalette(props: {
     ).map(keyOf);
     return filterCommandPaletteItems(items, query, messageMatchKeys, now);
   }, [items, now, query, search.matches]);
-  // Remember which thread this query picked, so the thread view can record it with the open.
-  // The open thread does not remount, so its pick is recorded here.
+  // The pick is an open with its query. The thread view also records the open;
+  // the server merges the two.
   const runResult = (item: CommandPaletteResult) => {
-    if (item.kind === "thread" && query.trim() && !query.startsWith(">")) {
-      if (
-        activeThread &&
-        activeThread.lastVisitedAt !== undefined &&
-        item.key === scopedThreadKey(activeThread.environmentId, activeThread.id)
-      ) {
-        void visitThread({
-          environmentId: activeThread.environmentId,
-          input: {
-            threadId: activeThread.id,
-            visitedAt: activeThread.updatedAt,
-            opened: true,
-            searchQuery: query,
-          },
-        });
-      } else {
-        rememberThreadSearchPick(item.key, query);
-      }
+    const thread =
+      item.kind === "thread" && query.trim() && !query.startsWith(">")
+        ? threads.find(
+            (candidate) => scopedThreadKey(candidate.environmentId, candidate.id) === item.key,
+          )
+        : undefined;
+    if (thread && thread.lastVisitedAt !== undefined) {
+      void visitThread({
+        environmentId: thread.environmentId,
+        input: {
+          threadId: thread.id,
+          visitedAt: thread.updatedAt,
+          opened: true,
+          searchQuery: query,
+        },
+      });
     }
     item.run();
   };

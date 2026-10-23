@@ -1,4 +1,3 @@
-import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   canSnooze,
   effectiveSnoozed,
@@ -11,7 +10,11 @@ import {
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveThreadProviderStack } from "@t3tools/client-runtime/state/models";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  threadSearchMatchKey,
+  threadSearchSubject,
+} from "@t3tools/client-runtime/state/thread-search";
+import { normalizeSearchQuery, scoreThreadSearch } from "@t3tools/shared/searchRank";
 import {
   createInboxReturnTracker,
   isThreadWorking,
@@ -602,7 +605,8 @@ export function buildThreadListV2Items(input: {
             pendingOrder: null,
           }),
         );
-  const query = input.searchQuery.trim().toLocaleLowerCase();
+  const query = normalizeSearchQuery(input.searchQuery);
+  const nowMs = Date.parse(now);
   const projectKeys = input.projectRefs
     ? new Set(input.projectRefs.map((ref) => `${ref.environmentId}:${ref.projectId}`))
     : null;
@@ -621,12 +625,10 @@ export function buildThreadListV2Items(input: {
     if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
       continue;
     }
+    // The same word-aware match as the command palette; the list keeps its own order.
     if (
       query.length > 0 &&
-      !thread.title.toLocaleLowerCase().includes(query) &&
-      !threadPullRequestSearchTerms(thread).some((term) =>
-        term.toLocaleLowerCase().includes(query),
-      ) &&
+      scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs) === null &&
       input.matchedThreadKeys?.has(
         threadSearchMatchKey({
           environmentId: thread.environmentId,

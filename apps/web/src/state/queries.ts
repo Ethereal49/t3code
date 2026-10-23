@@ -10,6 +10,7 @@ import {
   type EnvironmentThreadSearchMatch,
   type SettledThreadSearch,
 } from "@t3tools/client-runtime/state/thread-search";
+import { messageSearchTokens, normalizeSearchQuery } from "@t3tools/shared/searchRank";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
@@ -84,7 +85,10 @@ export function useThreadSearch(
 } {
   const normalizedQuery = query.trim();
   const debouncedQuery = useDebouncedValue(normalizedQuery, THREAD_SEARCH_DEBOUNCE_MS);
-  const canSearch = environmentIds.length > 0 && normalizedQuery.length >= 2;
+  // The server needs a word of three or more letters; shorter queries would always come back empty.
+  const canSearch =
+    environmentIds.length > 0 &&
+    messageSearchTokens(normalizeSearchQuery(normalizedQuery)).long.length > 0;
   const settledQuery = canSearch && normalizedQuery === debouncedQuery ? debouncedQuery : null;
   const searchKey =
     settledQuery === null ? null : makeThreadSearchKey(environmentIds, settledQuery);
@@ -92,8 +96,9 @@ export function useThreadSearch(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearchResultsAtom(searchKey),
   );
   const isPending = canSearch && (normalizedQuery !== debouncedQuery || result.isLoading);
+  // Show what fast environments returned rather than wait for a slow one.
   const ready =
-    settledQuery !== null && !result.isLoading
+    settledQuery !== null && (!result.isLoading || result.matches.length > 0)
       ? { query: settledQuery, matches: result.matches }
       : null;
   // Kept from earlier renders: React's pattern for information from previous renders.

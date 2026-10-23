@@ -1,8 +1,5 @@
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  rememberThreadSearchPick,
-  type EnvironmentThreadSearchMatch,
-} from "@t3tools/client-runtime/state/thread-search";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { normalizeSearchQuery, rankMessageMatches } from "@t3tools/shared/searchRank";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -131,11 +128,13 @@ export function useCommandPaletteThreadItems(input: {
       );
     },
     runThread: async (thread) => {
-      const picked = threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">");
-      const isOpen =
-        thread.id === activeThread?.id && thread.environmentId === activeThread.environmentId;
-      if (picked && isOpen && thread.lastVisitedAt !== undefined) {
-        // The open thread does not remount, so record the pick here.
+      // The pick is an open with its query. The thread view also records the
+      // open; the server merges the two.
+      if (
+        threadSearchQuery.trim().length > 0 &&
+        !threadSearchQuery.startsWith(">") &&
+        thread.lastVisitedAt !== undefined
+      ) {
         void visitThread({
           environmentId: thread.environmentId,
           input: {
@@ -145,11 +144,6 @@ export function useCommandPaletteThreadItems(input: {
             searchQuery: threadSearchQuery,
           },
         });
-      } else if (picked) {
-        rememberThreadSearchPick(
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-          threadSearchQuery,
-        );
       }
       await navigate({
         to: "/$environmentId/$threadId",

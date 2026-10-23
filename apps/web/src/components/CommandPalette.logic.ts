@@ -464,26 +464,28 @@ function rankPaletteItem(
   item: PaletteItem,
   normalizedQuery: string,
   now: number,
-  typos: boolean,
-): {
-  readonly score: number;
-  readonly quality: number;
-  readonly ranges: ReadonlyArray<SearchRange>;
-} | null {
+  options: { readonly typos: boolean; readonly weight: number },
+): { readonly score: number; readonly ranges: ReadonlyArray<SearchRange> } | null {
   if (item.threadSearch) {
-    const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, { typos });
-    return match && { score: match.score, quality: match.quality, ranges: match.titleRanges };
+    const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
+    return match && { score: match.score, ranges: match.titleRanges };
   }
-  const match = scoreSearchTerms(normalizedQuery, item.searchTerms, { typos });
+  const match = scoreSearchTerms(normalizedQuery, item.searchTerms, options);
   // Ranges index the first search term, so they only highlight a title that is that term.
   return match && (item.title === item.searchTerms[0] ? match : { ...match, ranges: [] });
 }
 
+// Commands count as if used today, like an active thread, so "new" still runs
+// "New thread" rather than opening an old thread named "New thread".
+const ACTION_WEIGHT = 2;
+// Next to matching threads, other groups show only their best few rows.
+const SECONDARY_GROUP_LIMIT = 3;
+
 /**
- * Filters and ranks the palette for a query. Groups order by their best match,
- * so a strong thread match is not stuck under a weak action match; ties keep
- * the usual order. Server message matches always come last, in their own
- * group, so rows above never move when they arrive.
+ * Filters and ranks the palette for a query. Groups order by their best score,
+ * where threads count their use, so a thread you work in is not stuck under a
+ * setting that matches about as well. Server message matches always come
+ * last, in their own group, so rows above never move when they arrive.
  */
 export function filterCommandPaletteGroups(input: {
   activeGroups: ReadonlyArray<CommandPaletteGroup>;
@@ -542,10 +544,16 @@ export function filterCommandPaletteGroups(input: {
   }
 
   const now = input.now ?? Date.now();
-  const groups = rankSearchGroups(
+  const ranked = rankSearchGroups(
     searchableGroups.map((group) => ({ group, items: group.items })),
-    (item, { typos }) => rankPaletteItem(item, normalizedQuery, now, typos),
-  ).map(({ group, ranked }): CommandPaletteGroup => {
+    (item, { typos }, group) =>
+      rankPaletteItem(item, normalizedQuery, now, {
+        typos,
+        weight: searchesEverything && group.value === "actions" ? ACTION_WEIGHT : 1,
+      }),
+  );
+  const threadsMatch = ranked.some(({ group }) => group.value === "threads-search");
+  const groups = ranked.map(({ group, ranked }): CommandPaletteGroup => {
     // Secondary items stay below the rest; the sort is stable, so score order holds.
     const items = ranked
       .toSorted(
@@ -555,11 +563,13 @@ export function filterCommandPaletteGroups(input: {
       .map(({ item, match }) =>
         match.ranges.length > 0 ? { ...item, titleRanges: match.ranges } : item,
       );
-    return {
-      value: group.value,
-      label: group.label,
-      items: group.value === "threads-search" ? items.slice(0, THREAD_SEARCH_RESULT_LIMIT) : items,
-    };
+    const limit =
+      group.value === "threads-search"
+        ? THREAD_SEARCH_RESULT_LIMIT
+        : searchesEverything && threadsMatch
+          ? SECONDARY_GROUP_LIMIT
+          : items.length;
+    return { value: group.value, label: group.label, items: items.slice(0, limit) };
   });
 
   if (!searchesEverything || !input.threadMessageItems?.length) return groups;

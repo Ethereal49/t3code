@@ -202,6 +202,49 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
+  it("keeps an active thread first while its title is typed, above settings and actions", () => {
+    const now = Date.parse("2026-10-23T00:00:00.000Z");
+    const action = (value: string, title: string, searchTerms: string[] = [title]) => ({
+      kind: "action" as const,
+      value,
+      searchTerms,
+      title,
+      icon: null,
+      run: async () => undefined,
+    });
+    const threadSearchItems = buildThreadActionItems({
+      threads: [
+        makeThread({
+          title: "Compaction prompt timing and cache age",
+          latestUserMessageAt: "2026-10-11T00:00:00.000Z",
+        }),
+      ],
+      projectByKey: new Map(),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async () => undefined,
+    });
+    const firstGroup = (query: string) =>
+      filterCommandPaletteGroups({
+        activeGroups: [
+          { value: "actions", label: "Actions", items: [action("action:copy", "Copy thread ID")] },
+        ],
+        query,
+        isInSubmenu: false,
+        projectSearchItems: [],
+        settingsSearchItems: [
+          action("setting:compact", "Compact idle threads"),
+          action("setting:providers", "Providers", ["Providers", "compatibility"]),
+        ],
+        threadSearchItems,
+        now,
+      })[0]?.label;
+
+    for (const query of ["comp", "compa", "compac", "compact", "compacti", "compaction"]) {
+      expect(firstGroup(query), query).toBe("Threads");
+    }
+  });
+
   it("orders groups by their best match, so a strong thread is not under a weak action", () => {
     const action = (value: string, title: string) => ({
       kind: "action" as const,

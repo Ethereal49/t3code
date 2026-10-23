@@ -12,6 +12,32 @@ import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 
+/**
+ * The message search index is keyed by message rowid. VACUUM keeps those
+ * rowids today, but SQLite does not promise it, so rebuild the index after one
+ * instead of trusting it. Databases from before migration 69 have no index.
+ */
+const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch")(function* (
+  sql: SqlClient.SqlClient,
+) {
+  const index = yield* sql`
+    SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
+  `;
+  if (index.length === 0) return;
+  yield* sql`
+    INSERT INTO orchestration_v2_message_search (orchestration_v2_message_search)
+    VALUES ('delete-all')
+  `;
+  yield* sql`
+    INSERT INTO orchestration_v2_message_search (rowid, text)
+    SELECT rowid, json_extract(payload_json, '$.text')
+    FROM orchestration_v2_projection_messages
+    WHERE streaming = 0
+      AND role IN ('user', 'assistant')
+      AND json_extract(payload_json, '$.text') IS NOT NULL
+  `;
+});
+
 export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingError>()(
   "DatabaseMissingError",
   { path: Schema.String },
@@ -194,6 +220,7 @@ const make = Effect.gen(function* () {
         // database to incremental auto_vacuum; the server reclaims online after.
         yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
         yield* sql`VACUUM`;
+        yield* rebuildMessageSearch(sql);
         yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
         return summary;
       }).pipe(
