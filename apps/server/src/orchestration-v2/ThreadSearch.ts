@@ -64,6 +64,8 @@ const SNIPPET_LENGTH = 240;
 // The newest hits read per query. A common word stops here instead of reading
 // every message, so time stays flat as history grows.
 const MESSAGE_HIT_LIMIT = 2000;
+// Reads of that many hits per search, when the first is full of weak matches.
+const MESSAGE_READ_LIMIT = 3;
 // Without the index, how many of the newest messages a search scans.
 const MESSAGE_SCAN_LIMIT = 20_000;
 
@@ -76,8 +78,10 @@ const WORD_BOUNDARIES = [
   "\n",
   "\t",
   "(",
+  ")",
   "[",
   "{",
+  "<",
   "`",
   '"',
   "'",
@@ -85,7 +89,12 @@ const WORD_BOUNDARIES = [
   "-",
   "_",
   ".",
+  ",",
   ":",
+  ";",
+  "=",
+  "+",
+  "|",
   "#",
   "@",
   "*",
@@ -353,23 +362,30 @@ export const make = Effect.gen(function* () {
         if (messageSearch === null) return;
         const { match, wordMatch, substrings } = messageSearch;
         const projectId = input.projectId;
-        const newest = yield* searchRows({ match, substrings, projectId, excludedThreadIds: [] });
-        const words = addRows(newest);
-        if (newest.length < MESSAGE_HIT_LIMIT) return;
-        // A full page can hold few words ("ing" sits mostly inside words) or few
-        // threads (one busy thread's newest messages). Read once more past the
-        // threads that already have a word match: words after a boundary when
-        // the hits sat mostly inside words, else the same query.
-        const mostlyInsideWords = words * 2 < newest.length;
-        if (!mostlyInsideWords && best.size >= (input.limit ?? 50)) return;
-        const found = [...best].flatMap(([threadId, hit]) => (hit.midWord ? [] : [threadId]));
-        const older = yield* searchRows({
-          match: mostlyInsideWords && wordMatch !== null ? wordMatch : match,
-          substrings,
-          projectId,
-          excludedThreadIds: found,
-        });
-        addRows(older);
+        const limit = input.limit ?? 50;
+        // A full page can hold few words ("ing" sits mostly inside words), few
+        // threads (one busy thread's newest messages), or only prefixes ("rusty"
+        // for "rust"). Read on past the threads that already have a word
+        // match, a few times at most: words after a boundary when the hits sat
+        // mostly inside words, else the same query.
+        let excludedThreadIds: ReadonlyArray<string> = [];
+        let mostlyInsideWords = false;
+        for (let page = 0; page < MESSAGE_READ_LIMIT; page++) {
+          const rows: ReadonlyArray<typeof SearchRow.Type> = yield* searchRows({
+            match: mostlyInsideWords && wordMatch !== null ? wordMatch : match,
+            substrings,
+            projectId,
+            excludedThreadIds,
+          });
+          const words = addRows(rows);
+          if (rows.length < MESSAGE_HIT_LIMIT) return;
+          mostlyInsideWords = words * 2 < rows.length;
+          const wholeWordThreads = [...best.values()].filter((hit) => hit.quality === 1).length;
+          if (!mostlyInsideWords && wholeWordThreads >= limit) return;
+          excludedThreadIds = [...best].flatMap(([threadId, hit]) =>
+            hit.midWord ? [] : [threadId],
+          );
+        }
       }),
     );
     const ranked = [...best.values()].sort(
@@ -430,7 +446,6 @@ export const make = Effect.gen(function* () {
         title: item.thread.title,
         source: "title",
       }));
-    if (titleHits.length >= limit) return { matches: titleHits };
     const shown = new Set(titleHits.map((hit) => hit.threadId));
     const { matches } = yield* searchMessages({
       query: input.query,
@@ -447,7 +462,12 @@ export const make = Effect.gen(function* () {
       ...match,
       title: subjectById.get(match.threadId)!.title,
     }));
-    return { matches: [...titleHits, ...messageHits].slice(0, limit) };
+    // Titles come first, but a fifth of the slots stay for message matches,
+    // as the palette keeps its "In messages" section.
+    const messageSlots = Math.min(messageHits.length, Math.ceil(limit / 5));
+    return {
+      matches: [...titleHits.slice(0, limit - messageSlots), ...messageHits].slice(0, limit),
+    };
   });
 
   return ThreadSearch.of({ search, searchThreads });

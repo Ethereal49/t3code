@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import { indexedMessageText } from "../../orchestration-v2/messageSearchIndex.ts";
+
 /**
  * Full-text index for thread message search. The trigram tokenizer matches any
  * substring of three or more characters, ignoring case and accents, so
@@ -54,7 +56,7 @@ export default Effect.gen(function* () {
       )
     BEGIN
       INSERT INTO orchestration_v2_message_search (rowid, text)
-      SELECT new.rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(new.payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
+      SELECT new.rowid, ${indexedMessageText(sql, "new.payload_json")}
       WHERE json_extract(new.payload_json, '$.text') IS NOT NULL;
     END
   `;
@@ -67,7 +69,7 @@ export default Effect.gen(function* () {
     BEGIN
       DELETE FROM orchestration_v2_message_search WHERE rowid = old.rowid AND old.streaming = 0;
       INSERT INTO orchestration_v2_message_search (rowid, text)
-      SELECT new.rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(new.payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
+      SELECT new.rowid, ${indexedMessageText(sql, "new.payload_json")}
       WHERE new.streaming = 0
         AND (
           new.role = 'assistant'
@@ -86,7 +88,7 @@ export default Effect.gen(function* () {
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
+    SELECT rowid, ${indexedMessageText(sql, "payload_json")}
     FROM orchestration_v2_projection_messages
     WHERE streaming = 0
       AND (

@@ -143,6 +143,12 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("fix", exact)).toEqual(["Fix sidebar", "Fix browser"]);
   });
 
+  it("finds a branch pasted with the app's worktree prefix", () => {
+    const subject = thread("Cmd+K search", { branch: "t3/cmdk-search-v2" });
+    expect(scoreThreadSearch(foldSearchQuery("t3/cmdk-search-v2"), subject, NOW)).not.toBeNull();
+    expect(scoreThreadSearch(foldSearchQuery("t3/cmdk"), subject, NOW)).not.toBeNull();
+  });
+
   it("ranks a title holding the words above the app's own branch prefix and project name", () => {
     const busy = { activityAt: NOW, opens: { openedAt: NOW, score: 6, picks: [] } };
     expect(
@@ -281,6 +287,10 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("inth", [thread("Show skill names in thread overview")])).toEqual([]);
     expect(rankTitles("tos", [thread("Move Client State to Server")])).toEqual([]);
     expect(rankTitles("t3co", [thread("T3 Code vs Gemini")])).toEqual(["T3 Code vs Gemini"]);
+    // Three letters of the last word are enough, as it is typed.
+    expect(rankTitles("gomod", [thread("Migrate to Go modules")])).toEqual([
+      "Migrate to Go modules",
+    ]);
     expect(rankTitles("strasse", [thread("Straße bauen")])).toEqual(["Straße bauen"]);
     // Joined words beat an earlier match inside a word.
     expect(scoreThreadSearch("vscode", thread("Fixvscode and VS Code"), NOW)?.quality).toBe(0.6);
@@ -651,6 +661,12 @@ describe("scoreMessageMatch", () => {
       scoreMessageMatch("\ufb01x then Résumé driven, later cafe\u0301 stuff", "res"),
     ).toMatchObject({ offset: 8 });
     expect(scoreMessageMatch("Die Straße ist lang", "strasse")).toMatchObject({ offset: 4 });
+    // Spelled-out letters win over a plain fragment earlier in the message.
+    expect(scoreMessageMatch("bloeuf œuf", "oeu")).toMatchObject({ offset: 7 });
+    expect(scoreMessageMatch("xstrasse then Straße", "strasse")).toMatchObject({
+      quality: 1,
+      offset: 14,
+    });
     // A letter that grows when lowercased does not shift later offsets.
     expect(scoreMessageMatch("İ Enable fts and model", "fts")).toMatchObject({ offset: 9 });
     expect(scoreMessageMatch("İ Enable fts and model", "model")?.midWord).toBe(false);

@@ -339,6 +339,8 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
       yield* createProject(project);
       const older = ThreadId.make("thread:rust-word");
       const busy = ThreadId.make("thread:rustling");
+      const busier = ThreadId.make("thread:rustling-more");
+      // Two busy threads take a read each before the older word comes up.
       yield* Effect.forEach(
         [
           thread(older, project),
@@ -347,14 +349,19 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
           ...Array.from({ length: 2000 }, (_, index) =>
             message(busy, `rustling-${index}`, "assistant", "rustling leaves outside"),
           ),
+          thread(busier, project),
+          ...Array.from({ length: 2000 }, (_, index) =>
+            message(busier, `rustling-more-${index}`, "assistant", "rustling leaves again"),
+          ),
         ],
         projections.apply,
         { discard: true },
       );
       const { matches } = yield* search.search({ query: "rust" });
-      assert.deepEqual(
+      assert.deepEqual(matches[0]?.threadId, older);
+      assert.sameMembers(
         matches.map((match) => match.threadId),
-        [older, busy],
+        [older, busy, busier],
       );
     }),
   );

@@ -46,30 +46,38 @@ export interface SearchRange {
 const fieldCache = new Map<string, SearchField>();
 const FIELD_CACHE_LIMIT = 100_000;
 
-// Letters that Unicode does not decompose into a base letter and a mark.
-const LETTER_EXPANSIONS: Readonly<Record<string, string>> = {
+/**
+ * Letters search spells out, in both cases, as titles fold them and the
+ * message index stores them ("ß" as "ss"). Unicode does not decompose them
+ * into a base letter and a mark.
+ */
+export const SPELLED_OUT_LETTERS: Readonly<Record<string, string>> = {
   ß: "ss",
+  ẞ: "ss",
   æ: "ae",
+  Æ: "ae",
   œ: "oe",
+  Œ: "oe",
   ø: "o",
+  Ø: "o",
   ł: "l",
+  Ł: "l",
   đ: "d",
+  Đ: "d",
 };
+const SPELLED_OUT_LETTER = new RegExp(`[${Object.keys(SPELLED_OUT_LETTERS).join("")}]`, "gu");
 
 /**
  * `text` with the letters search spells out ("ß" as "ss"), as the message
  * index stores them, so a typed "straße" also finds "Strasse".
  */
 export function spellOutLetters(text: string): string {
-  return text.replace(
-    /[ßẞæÆœŒøØłŁđĐ]/gu,
-    (letter) => LETTER_EXPANSIONS[letter.toLowerCase()] ?? letter,
-  );
+  return text.replace(SPELLED_OUT_LETTER, (letter) => SPELLED_OUT_LETTERS[letter] ?? letter);
 }
 
 function foldCharacter(character: string): string {
   const folded = character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
-  return LETTER_EXPANSIONS[folded] ?? folded;
+  return SPELLED_OUT_LETTERS[folded] ?? folded;
 }
 
 // Chinese and Japanese text has no spaces, so each ideograph or kana starts a word.
@@ -227,15 +235,15 @@ interface TokenMatch extends SearchRange {
  * longer ones only inside a word where `midWord` allows it. With
  * `typos`, a three-character token may swap a pair and a longer one may carry
  * one typo in a word prefix that keeps its first letter. Numbers never match
- * with a typo: 22889 is not pull request 22189. In a `name`, the token may also
- * be whole words typed together (see `matchJoinedWords`), and with typos also
+ * with a typo: 22889 is not pull request 22189. In the primary field (the
+ * name), the token may also be whole words typed together (see `matchJoinedWords`), and with typos also
  * initials or word-start runs (see `matchInitials`).
  */
 function matchToken(
   field: SearchField,
   token: string,
   typos: boolean,
-  name: boolean,
+  isPrimary: boolean,
   midWord: boolean,
 ): TokenMatch | null {
   if (token.length === 0) return null;
@@ -268,7 +276,7 @@ function matchToken(
   }
   // Joined words are exact, so they count without the typo pass: a strong
   // match elsewhere must not hide "VS Code" for "vscode".
-  if ((best === null || best.score <= MID_WORD) && name) {
+  if ((best === null || best.score <= MID_WORD) && isPrimary) {
     const joined = matchJoinedWords(field, token);
     if (joined) return joined;
   }
@@ -302,7 +310,7 @@ function matchToken(
       }
     }
   }
-  return best ?? (typos && name ? matchInitials(field, token) : null);
+  return best ?? (typos && isPrimary ? matchInitials(field, token) : null);
 }
 
 /**
@@ -334,12 +342,18 @@ function matchJoinedWords(field: SearchField, token: string): TokenMatch | null 
         break;
       }
     }
-    // Short words before a mere prefix are a coincidence inside a title
+    // Short words before a short prefix are a coincidence inside a title
     // ("inth" is not "in th(read)"), but not at its start ("t3co" is "T3
-    // Co(de)"), nor before a whole word ("vscode" is "VS Code").
+    // Co(de)"), before three letters ("gomod"), or a whole word ("vscode").
     const shortBefore = letters.slice(0, -1).some((range) => range.end - range.start < 3);
     const atStart = start === field.wordStarts.indexOf(1);
-    if (rest.length === 0 && letters.length > 1 && (lastWhole || atStart || !shortBefore)) {
+    const last = letters.at(-1);
+    const lastLong = last !== undefined && last.end - last.start >= 3;
+    if (
+      rest.length === 0 &&
+      letters.length > 1 &&
+      (lastWhole || lastLong || atStart || !shortBefore)
+    ) {
       return { score: JOINED_WORDS, start, end: letters.at(-1)!.end, letters };
     }
   }
@@ -606,7 +620,7 @@ export interface MessageMatch {
 // Accents written as separate combining marks ("e" + "\u0301").
 const HAS_MARK = /\p{M}/u;
 // Letters `foldCharacter` expands, which native normalization does not.
-const EXPANDING_LETTER = /[ßẞæÆœŒøØłŁđĐ]/u;
+const EXPANDING_LETTER = new RegExp(`[${Object.keys(SPELLED_OUT_LETTERS).join("")}]`, "u");
 
 /** `text` lowercased without changing its length, so offsets stay valid ("İ" grows). */
 function lowerCaseInPlace(text: string): string {
@@ -731,7 +745,9 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
     }
     if (
       foldedToken.length > 0 &&
-      (first === -1 || (wholeWord === -1 && (accents?.test(text) || HAS_MARK.test(text))))
+      (first === -1 ||
+        (wholeWord === -1 &&
+          (accents?.test(text) || HAS_MARK.test(text) || EXPANDING_LETTER.test(text))))
     ) {
       folded ??= foldMessage(text);
       for (
@@ -1100,7 +1116,11 @@ export function scoreThreadSearch(
   }
   const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
   const pickedAt = pick?.at;
-  const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#\s*/, "");
+  // "#22889" and a pasted "t3/branch" search without their prefixes, as the
+  // branch field is stored without the app's worktree prefix.
+  const fieldQuery = withoutPullRequestWords(normalizedQuery, thread)
+    .replace(/^#\s*/, "")
+    .replace(WORKTREE_BRANCH_PREFIX_PATTERN, "");
   const fieldMatch = matchSearchFields(fieldQuery, fields, options);
   const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
   const pickOnly =
