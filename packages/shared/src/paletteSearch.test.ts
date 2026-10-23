@@ -124,6 +124,23 @@ describe("scoreThreadSearch", () => {
       }),
     ];
     expect(rankTitles("deploy", repicked)).toEqual(["Deploy timeout on Railway", "Deploy"]);
+    // A thread's exact pick counts even after a newer pick for a longer query.
+    const exact = [
+      thread("Fix browser", {
+        opens: {
+          openedAt: NOW,
+          score: 2,
+          picks: [
+            { query: "fix browser", at: NOW },
+            { query: "fix", at: NOW - 2 * DAY },
+          ],
+        },
+      }),
+      thread("Fix sidebar", {
+        opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "fix", at: NOW - DAY }] },
+      }),
+    ];
+    expect(rankTitles("fix", exact)).toEqual(["Fix sidebar", "Fix browser"]);
   });
 
   it("ranks a title holding the words above the app's own branch prefix and project name", () => {
@@ -378,27 +395,32 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
 });
 
 describe("rankMessageMatches", () => {
-  it("merges environments by each match's own rank and lets use and picks decide", () => {
+  it("merges environments by match quality and use, with picks first", () => {
     const subjects = new Map([
-      ...Array.from({ length: 50 }, (_, index) => [`a${index}`, thread(`A ${index}`)] as const),
-      ["b0", thread("B recent", { activityAt: NOW })],
+      ["a-word", thread("A word")],
+      ["a-word-2", thread("A word too")],
+      ["b-prefix", thread("B prefix")],
+      ["b-recent", thread("B recent", { activityAt: NOW })],
       [
-        "b1",
+        "b-picked",
         thread("B picked", {
-          opens: { openedAt: NOW, score: 1, picks: [{ query: "needle", at: NOW }] },
+          opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "needle", at: NOW - DAY }] },
         }),
       ],
     ]);
+    // Environment A sent two whole words, environment B a prefix and two more.
     const matches = [
-      ...Array.from({ length: 50 }, (_, rank) => ({ key: `a${rank}`, rank })),
-      { key: "b0", rank: 0 },
-      { key: "b1", rank: 1 },
+      { key: "a-word", quality: 1 },
+      { key: "a-word-2", quality: 1 },
+      { key: "b-prefix", quality: 0.8 },
+      { key: "b-recent", quality: 1 },
+      { key: "b-picked", quality: 0.8 },
     ];
     expect(
-      rankMessageMatches(matches, (match) => subjects.get(match.key), "needle", NOW)
-        .slice(0, 3)
-        .map((match) => match.key),
-    ).toEqual(["b1", "b0", "a0"]);
+      rankMessageMatches(matches, (match) => subjects.get(match.key), "needle", NOW).map(
+        (match) => match.key,
+      ),
+    ).toEqual(["b-picked", "b-recent", "a-word", "a-word-2", "b-prefix"]);
   });
 
   it("keeps matches inside words below word matches, however used", () => {
@@ -406,14 +428,13 @@ describe("rankMessageMatches", () => {
       activityAt: NOW,
       opens: { openedAt: NOW, score: 20, picks: [] },
     });
-    const quiet = thread("Quiet");
     const matches = [
-      { key: "busy", rank: 0, midWord: true },
-      { key: "quiet", rank: 1 },
+      { key: "busy", quality: 0.3 },
+      { key: "quiet", quality: 1 },
     ];
     const subjects = new Map([
       ["busy", busy],
-      ["quiet", quiet],
+      ["quiet", thread("Quiet")],
     ]);
     expect(
       rankMessageMatches(matches, (match) => subjects.get(match.key), "rust", NOW).map(
@@ -561,6 +582,7 @@ describe("findSearchTokenRanges", () => {
 
   it("highlights a three-letter token only where it starts a word", () => {
     expect(findSearchTokenRanges("drafts, enableFTS", "fts")).toEqual([{ start: 14, end: 17 }]);
+    expect(findSearchTokenRanges("Open handlers.ts", ".ts")).toEqual([{ start: 13, end: 16 }]);
   });
 });
 
@@ -602,6 +624,11 @@ describe("scoreMessageMatch", () => {
       offset: 15,
     });
     expect(scoreMessageMatch("Le CAFÉ ouvert", "cafe")).toMatchObject({ quality: 1, offset: 3 });
+    // An accented whole word beats a plain prefix earlier on.
+    expect(scoreMessageMatch("The cafeteria, then the Café", "cafe")).toMatchObject({
+      quality: 1,
+      offset: 24,
+    });
     expect(scoreMessageMatch("I presume this. Résumé indexing", "resume")).toMatchObject({
       quality: 1,
       offset: 16,

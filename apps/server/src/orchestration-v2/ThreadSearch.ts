@@ -376,13 +376,13 @@ export const make = Effect.gen(function* () {
       (left, right) => right.quality - left.quality || newer(left, right),
     );
     return {
-      matches: ranked.slice(0, input.limit ?? 50).map(({ row, midWord, offset }) => ({
+      matches: ranked.slice(0, input.limit ?? 50).map(({ row, quality, offset }) => ({
         threadId: row.threadId,
         projectId: row.projectId,
         source: row.source,
         snippet: buildSearchSnippet(row.text, offset),
         messageCreatedAt: row.messageCreatedAt,
-        ...(midWord ? { midWord: true as const } : {}),
+        quality,
       })),
     };
   });
@@ -438,14 +438,12 @@ export const make = Effect.gen(function* () {
       projectId: input.projectId ?? null,
     });
     const messageHits = rankMessageMatches(
-      matches.flatMap((match, rank) =>
-        subjectById.has(match.threadId) && !shown.has(match.threadId) ? [{ ...match, rank }] : [],
-      ),
+      matches.filter((match) => subjectById.has(match.threadId) && !shown.has(match.threadId)),
       (match) => subjectById.get(match.threadId),
       normalizedQuery,
       now,
       { picks: false },
-    ).map(({ rank: _rank, midWord: _midWord, ...match }) => ({
+    ).map(({ quality: _quality, ...match }) => ({
       ...match,
       title: subjectById.get(match.threadId)!.title,
     }));

@@ -164,6 +164,8 @@ export interface CommandPaletteItem {
   readonly value: string;
   readonly searchTerms: ReadonlyArray<string>;
   readonly title: ReactNode;
+  /** The title as plain text, for searching, when `title` is styled. */
+  readonly searchTitle?: string;
   readonly description?: ReactNode;
   readonly threadContentMatch?: CommandPaletteThreadContentMatch;
   readonly timestamp?: string;
@@ -487,9 +489,10 @@ function rankPaletteItem(
   }
   // The title names the item; search terms are keywords. Ranges index the
   // first term, so they only highlight a title that is that term.
+  const name = typeof item.title === "string" ? item.title : item.searchTitle;
   const terms =
-    typeof item.title === "string" && item.title !== item.searchTerms[0]
-      ? [item.title, ...item.searchTerms]
+    name !== undefined && name !== item.searchTerms[0]
+      ? [name, ...item.searchTerms]
       : item.searchTerms;
   const match = scoreSearchTerms(normalizedQuery, terms, options);
   return match && (item.title === terms[0] ? match : { ...match, ranges: [] });

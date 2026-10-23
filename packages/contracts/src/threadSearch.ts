@@ -31,8 +31,11 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   source: OrchestrationThreadSearchSource,
   snippet: Schema.String.check(Schema.isMaxLength(240)),
   messageCreatedAt: Schema.NullOr(IsoDateTime),
-  /** A query word appears only inside longer words, so the match is weaker. */
-  midWord: Schema.optionalKey(Schema.Literal(true)),
+  /**
+   * How well the message matches: 1 for whole words, 0.8 when a word only
+   * starts one, 0.3 when one only appears inside words. Older servers omit it.
+   */
+  quality: Schema.optionalKey(Schema.Finite),
 });
 export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
 

@@ -384,6 +384,36 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
+  it("searches a styled command title by its plain text", () => {
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [
+        {
+          value: "actions",
+          label: "Actions",
+          items: [
+            {
+              kind: "action",
+              value: "action:new-thread",
+              searchTerms: ["new thread", "chat"],
+              // Styled: not a string, so only `searchTitle` holds its words.
+              title: ["New thread in ", "t3code"],
+              searchTitle: "New thread in t3code",
+              icon: null,
+              run: async () => undefined,
+            },
+          ],
+        },
+      ],
+      query: "> new t3code",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    });
+    expect(groups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
+      "action:new-thread",
+    ]);
+  });
+
   it("forgives a typo in a setting name when nothing matches exactly", () => {
     const groups = filterCommandPaletteGroups({
       activeGroups: [],

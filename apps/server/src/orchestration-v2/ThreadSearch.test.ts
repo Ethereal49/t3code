@@ -458,7 +458,7 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
         );
         const { matches } = yield* search.search({ query: "rust" });
         assert.deepEqual(
-          matches.map((match) => [match.threadId, match.midWord ?? false]),
+          matches.map((match) => [match.threadId, (match.quality ?? 1) <= 0.3]),
           [
             [rust, false],
             [trust, true],

@@ -78,8 +78,6 @@ export function takeThreadOpen(
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
   readonly environmentId: EnvironmentId;
-  /** Position in its environment's results, which the server orders by match and age. */
-  readonly rank: number;
 }
 
 export interface ThreadSearchResultsState {
@@ -135,13 +133,7 @@ export function createThreadSearchResultsAtomFamily<E>(options: {
         isLoading ||= result.waiting;
         const value = Option.getOrNull(AsyncResult.value(result));
         if (value !== null) {
-          matches.push(
-            ...value.matches.map((match, rank) => ({
-              ...match,
-              environmentId,
-              rank,
-            })),
-          );
+          matches.push(...value.matches.map((match) => ({ ...match, environmentId })));
         }
       }
 

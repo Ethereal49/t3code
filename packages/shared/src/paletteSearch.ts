@@ -731,7 +731,7 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
     }
     if (
       foldedToken.length > 0 &&
-      (first === -1 || (wordStart === -1 && (accents?.test(text) || HAS_MARK.test(text))))
+      (first === -1 || (wholeWord === -1 && (accents?.test(text) || HAS_MARK.test(text))))
     ) {
       folded ??= foldMessage(text);
       for (
@@ -777,8 +777,10 @@ export function findSearchTokenRanges(text: string, query: string): SearchRange[
   const field = foldSearchField(text);
   const ranges: SearchRange[] = [];
   for (const [token, needsWordStart] of tokens) {
+    // A token that opens with punctuation brings its own boundary, as in scoring.
+    const ownBoundary = !ALPHANUMERIC.test(token[0]!) && !SYMBOL.test(token[0]!);
     for (let index = field.text.indexOf(token); index !== -1;) {
-      if (needsWordStart && !field.wordStarts[index]) {
+      if (needsWordStart && !ownBoundary && !field.wordStarts[index]) {
         index = field.text.indexOf(token, index + 1);
         continue;
       }
@@ -948,13 +950,16 @@ function activePick(
   // The start of a picked query counts from three letters: "n" is too little
   // to go on, and would flip the group order between keystrokes.
   const prefix = query.length >= PICK_ONLY_MIN_LENGTH;
+  // The latest exact pick, else the latest pick the query starts.
+  let exact: ThreadOpenStats["picks"][number] | undefined;
   let latest: ThreadOpenStats["picks"][number] | undefined;
   for (const pick of thread.opens?.picks ?? []) {
     if (now - pick.at > PICK_WINDOW_MS) continue;
+    if (pick.query === query && (exact === undefined || pick.at > exact.at)) exact = pick;
     const matches = pick.query === query || (prefix && pick.query.startsWith(query));
     if (matches && (latest === undefined || pick.at > latest.at)) latest = pick;
   }
-  return latest;
+  return exact ?? latest;
 }
 
 export interface ThreadSearchMatch {
@@ -1134,13 +1139,12 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
 }
 
 /**
- * Orders message matches from the server like title matches: matches where
- * every query word starts a word first, then threads picked for the query,
- * then by use. `rank` is the match's position in its own environment's
- * results (best match, then newest), so environments merge fairly.
+ * Orders message matches from the server, from any number of environments,
+ * like title matches: by match class, then threads picked for the query, then
+ * match quality times use, then the newest message.
  */
 export function rankMessageMatches<
-  T extends { readonly rank: number; readonly midWord?: boolean | undefined },
+  T extends { readonly quality?: number; readonly messageCreatedAt?: string | null },
 >(
   matches: ReadonlyArray<T>,
   subjectOf: (match: T) => ThreadSearchSubject | undefined,
@@ -1152,20 +1156,24 @@ export function rankMessageMatches<
     .flatMap((match) => {
       const subject = subjectOf(match);
       if (!subject) return [];
+      // Older servers send no quality; their matches count as words.
+      const quality = match.quality ?? 1;
       return [
         {
           match,
+          quality,
           pickedAt:
             options?.picks === false ? 0 : (activePick(subject, normalizedQuery, now)?.at ?? 0),
-          score: threadUsageBoost(subject, now) / (1 + 0.15 * match.rank),
+          score: quality * threadUsageBoost(subject, now),
         },
       ];
     })
     .sort(
       (left, right) =>
-        Number(left.match.midWord === true) - Number(right.match.midWord === true) ||
+        matchClass(right.quality) - matchClass(left.quality) ||
         right.pickedAt - left.pickedAt ||
-        right.score - left.score,
+        right.score - left.score ||
+        (right.match.messageCreatedAt ?? "").localeCompare(left.match.messageCreatedAt ?? ""),
     )
     .map(({ match }) => match);
 }
