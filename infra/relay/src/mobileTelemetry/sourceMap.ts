@@ -160,31 +160,21 @@ export function originalPositionFor(
 ): OriginalPosition | undefined {
   const lineIndex = line - 1;
   if (lineIndex < 0 || lineIndex >= map.lineStarts.length - 1) return undefined;
-  let low = map.lineStarts[lineIndex]!;
-  let high = map.lineStarts[lineIndex + 1]! - 1;
-  const lineStart = low;
-  let found = -1;
-  // Columns within a line are sorted, so the last segment at or before `column` wins.
-  while (low <= high) {
+  const lineStart = map.lineStarts[lineIndex]!;
+  // Columns within a line are sorted. Find the first segment at or after
+  // `column`: an exact hit takes it, since Hermes maps a function's first
+  // instruction twice (the declaration, then the first statement) and other
+  // source map libraries take the first; otherwise the segment before wins.
+  let low = lineStart;
+  let high = map.lineStarts[lineIndex + 1]!;
+  while (low < high) {
     const middle = (low + high) >>> 1;
-    if (map.generatedColumns[middle]! <= column) {
-      found = middle;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
+    if (map.generatedColumns[middle]! < column) low = middle + 1;
+    else high = middle;
   }
-  if (found === -1) return undefined;
-  // Hermes maps a function's first instruction twice (the declaration, then
-  // the first statement). On an exact hit take the first, as other source map
-  // libraries do.
-  while (
-    found > lineStart &&
-    map.generatedColumns[found] === column &&
-    map.generatedColumns[found - 1] === column
-  ) {
-    found -= 1;
-  }
+  const exact = low < map.lineStarts[lineIndex + 1]! && map.generatedColumns[low] === column;
+  const found = exact ? low : low - 1;
+  if (found < lineStart) return undefined;
   const sourceIndex = map.sourceIndexes[found]!;
   const source = sourceIndex === -1 ? undefined : map.sources[sourceIndex];
   if (source === undefined) return undefined;
@@ -214,6 +204,13 @@ export interface SymbolicatedStack {
 }
 
 /**
+ * How much rewriting may lengthen one stack. Source paths are longer than the
+ * frames they replace, and a request can carry many thousands of frames, so
+ * frames past this budget keep their bundle offsets.
+ */
+const MAX_STACK_GROWTH = 1024 * 1024;
+
+/**
  * Rewrites each bundle frame's location to its original file, line and
  * column (1-based, as JavaScript stacks print them), keeping the frame's
  * function name and every other line as it was.
@@ -221,14 +218,18 @@ export interface SymbolicatedStack {
 export function symbolicateStack(stack: string, map: CompactSourceMap): SymbolicatedStack {
   let bundleFrames = 0;
   let mappedFrames = 0;
+  let growth = 0;
   const lines = stack.split("\n").map((line) => {
     const match = BUNDLE_FRAME.exec(line);
     if (!match) return line;
     bundleFrames += 1;
     const position = originalPositionFor(map, Number(match[2]), Number(match[3]));
     if (!position) return line;
+    const location = `${position.source}:${position.line}:${position.column + 1}`;
+    growth += location.length - match[0].length;
+    if (growth > MAX_STACK_GROWTH) return line;
     mappedFrames += 1;
-    return line.replace(match[0], `${position.source}:${position.line}:${position.column + 1}`);
+    return line.replace(match[0], location);
   });
   return { stack: lines.join("\n"), bundleFrames, mappedFrames };
 }

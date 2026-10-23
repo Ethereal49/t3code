@@ -105,6 +105,19 @@ describe("symbolicateStack", () => {
     });
   });
 
+  it("stops rewriting frames once the stack has grown by a megabyte", () => {
+    const longSource = "a".repeat(64 * 1024);
+    const map = decodeSourceMap({ version: 3, sources: [longSource], mappings: "AAAA" })!;
+    const frames = Array.from(
+      { length: 100 },
+      () => "    at f (address at index.android.bundle:1:0)",
+    );
+    const result = symbolicateStack(["Error", ...frames].join("\n"), map);
+    expect(result.bundleFrames).toBe(100);
+    expect(result.mappedFrames).toBe(16);
+    expect(result.stack.length).toBeLessThan(1024 * 1024 + 100 * frames[0]!.length);
+  });
+
   it("leaves frames the map does not cover as they were", () => {
     const map = decodeSourceMap({ version: 3, sources: ["a.js"], mappings: "kBAAA" })!;
     const stack = "Error\n    at f (address at index.android.bundle:1:3)";
