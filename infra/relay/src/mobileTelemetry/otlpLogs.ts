@@ -112,6 +112,8 @@ export type SymbolicationStatus = "symbolicated" | "no_bundle_frames" | "source_
 export interface SymbolicationOutcome {
   readonly status: SymbolicationStatus;
   readonly mappedFrames: number;
+  /** How much longer the stack got. */
+  readonly growth: number;
 }
 
 const stringValue = (key: string, value: string) => ({ key, value: { stringValue: value } });
@@ -123,25 +125,27 @@ const setAttribute = (attributes: Array<unknown>, key: string, value: string) =>
 };
 
 /**
- * Rewrites one exception's stack with the map found for it, and records how
- * that went on the record so a stack still minified in Axiom explains itself.
+ * Rewrites one exception's stack with the map found for it, growing it by at
+ * most `maxGrowth`, and records how that went on the record so a stack still
+ * minified in Axiom explains itself.
  */
 export function applySymbolication(
   exception: JsException,
   found: { readonly key: string; readonly map: CompactSourceMap } | undefined,
+  maxGrowth: number,
 ): SymbolicationOutcome {
   if (!found) {
     setAttribute(exception.attributes, "relay.symbolication.status", "source_map_missing");
-    return { status: "source_map_missing", mappedFrames: 0 };
+    return { status: "source_map_missing", mappedFrames: 0, growth: 0 };
   }
-  const result = symbolicateStack(exception.stack, found.map);
+  const result = symbolicateStack(exception.stack, found.map, maxGrowth);
   setAttribute(exception.attributes, "relay.symbolication.source_map", found.key);
   if (result.mappedFrames === 0) {
     setAttribute(exception.attributes, "relay.symbolication.status", "no_bundle_frames");
-    return { status: "no_bundle_frames", mappedFrames: 0 };
+    return { status: "no_bundle_frames", mappedFrames: 0, growth: 0 };
   }
   setAttribute(exception.attributes, "relay.symbolication.status", "symbolicated");
   setAttribute(exception.attributes, "relay.symbolication.raw_stacktrace", exception.stack);
   setAttribute(exception.attributes, "exception.stacktrace", result.stack);
-  return { status: "symbolicated", mappedFrames: result.mappedFrames };
+  return { status: "symbolicated", mappedFrames: result.mappedFrames, growth: result.growth };
 }

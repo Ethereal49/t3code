@@ -106,9 +106,10 @@ describe("applySymbolication", () => {
   it("replaces the stack and keeps the original", () => {
     const stack = "Error: x\n    at render (address at index.android.bundle:1:12)";
     const exception = exceptionWith(stack);
-    expect(applySymbolication(exception, { key: "android/ota/x.map", map })).toEqual({
+    expect(applySymbolication(exception, { key: "android/ota/x.map", map }, Infinity)).toEqual({
       status: "symbolicated",
       mappedFrames: 1,
+      growth: "src/App.tsx:1:3".length - "address at index.android.bundle:1:12".length,
     });
     expect(attributeValue(exception.attributes, "exception.stacktrace")).toBe(
       "Error: x\n    at render (src/App.tsx:1:3)",
@@ -121,13 +122,13 @@ describe("applySymbolication", () => {
 
   it("records why a stack stayed as it was", () => {
     const missing = exceptionWith("Error\n    at f (address at index.android.bundle:1:12)");
-    expect(applySymbolication(missing, undefined).status).toBe("source_map_missing");
+    expect(applySymbolication(missing, undefined, Infinity).status).toBe("source_map_missing");
     expect(attributeValue(missing.attributes, "relay.symbolication.status")).toBe(
       "source_map_missing",
     );
 
     const native = exceptionWith("Error\n    at f (native)");
-    expect(applySymbolication(native, { key: "k", map }).status).toBe("no_bundle_frames");
+    expect(applySymbolication(native, { key: "k", map }, Infinity).status).toBe("no_bundle_frames");
     expect(attributeValue(native.attributes, "exception.stacktrace")).toBe(
       "Error\n    at f (native)",
     );

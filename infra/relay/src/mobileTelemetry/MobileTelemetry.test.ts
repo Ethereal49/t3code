@@ -134,7 +134,7 @@ const ingest = (signal: string, body: string, projectId = PROJECT_ID) =>
 const sentText = (request: HttpClientRequest.HttpClientRequest) =>
   request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
 
-const exceptionLogs = (stack: string) =>
+const exceptionLogs = (...stacks: ReadonlyArray<string>) =>
   encodeJson({
     resourceLogs: [
       {
@@ -146,14 +146,12 @@ const exceptionLogs = (stack: string) =>
         },
         scopeLogs: [
           {
-            logRecords: [
-              {
-                attributes: [
-                  { key: "expo.error.source", value: { stringValue: "global" } },
-                  { key: "exception.stacktrace", value: { stringValue: stack } },
-                ],
-              },
-            ],
+            logRecords: stacks.map((stack) => ({
+              attributes: [
+                { key: "expo.error.source", value: { stringValue: "global" } },
+                { key: "exception.stacktrace", value: { stringValue: stack } },
+              ],
+            })),
           },
         ],
       },
@@ -218,6 +216,39 @@ describe("MobileTelemetry", () => {
       });
       // The decoded map is reused for the second request.
       expect(harness.objectReads).toEqual([`android/ota/${UPDATE_ID}.map`]);
+    }),
+  );
+
+  it.effect("shares one growth budget across every exception in a request", () =>
+    Effect.gen(function* () {
+      // Each rewritten frame grows by about 600 KiB, so only the first fits in 1 MiB.
+      const longSource = `${"a".repeat(600 * 1024)}.tsx`;
+      const harness = yield* makeHarness({
+        objects: {
+          [`android/ota/${UPDATE_ID}.map`]: encodeJson({
+            version: 3,
+            sources: [longSource],
+            mappings: "AAAA",
+          }),
+        },
+      });
+      const stack = "Error: x\n    at render (address at index.android.bundle:1:0)";
+      yield* harness.send(ingest("logs", exceptionLogs(stack, stack)));
+      const payload = decodeJson(sentText(harness.sent[0]!)) as {
+        resourceLogs: Array<{
+          scopeLogs: Array<{
+            logRecords: Array<{
+              attributes: Array<{ key: string; value: { stringValue: string } }>;
+            }>;
+          }>;
+        }>;
+      };
+      const statuses = payload.resourceLogs[0]!.scopeLogs[0]!.logRecords.map(
+        (record) =>
+          record.attributes.find(({ key }) => key === "relay.symbolication.status")?.value
+            .stringValue,
+      );
+      expect(statuses).toEqual(["symbolicated", "no_bundle_frames"]);
     }),
   );
 

@@ -201,39 +201,45 @@ export interface SymbolicatedStack {
   readonly bundleFrames: number;
   /** Bundle frames the map resolved. */
   readonly mappedFrames: number;
+  /** How much longer the stack got. */
+  readonly growth: number;
 }
-
-/**
- * How much rewriting may lengthen one stack. Source paths are longer than the
- * frames they replace, and a request can carry many thousands of frames, so
- * frames past this budget keep their bundle offsets.
- */
-const MAX_STACK_GROWTH = 1024 * 1024;
 
 /**
  * Rewrites each bundle frame's location to its original file, line and
  * column (1-based, as JavaScript stacks print them), keeping the frame's
- * function name and every other line as it was.
+ * function name and every other line as it was. Source paths are longer than
+ * the offsets they replace, so once the stack would grow by more than
+ * `maxGrowth` the remaining frames keep their offsets.
  */
-export function symbolicateStack(stack: string, map: CompactSourceMap): SymbolicatedStack {
+export function symbolicateStack(
+  stack: string,
+  map: CompactSourceMap,
+  maxGrowth: number,
+): SymbolicatedStack {
   let bundleFrames = 0;
   let mappedFrames = 0;
   let growth = 0;
+  let exhausted = false;
   const lines = stack.split("\n").map((line) => {
     const match = BUNDLE_FRAME.exec(line);
     if (!match) return line;
     bundleFrames += 1;
-    if (growth > MAX_STACK_GROWTH) return line;
+    if (exhausted) return line;
     const position = originalPositionFor(map, Number(match[2]), Number(match[3]));
     if (!position) return line;
     const lineAndColumn = `:${position.line}:${position.column + 1}`;
     // Checked before the location string exists, so a long path costs nothing once over.
-    growth += position.source.length + lineAndColumn.length - match[0].length;
-    if (growth > MAX_STACK_GROWTH) return line;
+    const added = position.source.length + lineAndColumn.length - match[0].length;
+    if (growth + added > maxGrowth) {
+      exhausted = true;
+      return line;
+    }
+    growth += added;
     mappedFrames += 1;
     // Spliced, not `replace`d: a replacement string would expand `$&` and `$'` in the path.
     const end = match.index + match[0].length;
     return line.slice(0, match.index) + position.source + lineAndColumn + line.slice(end);
   });
-  return { stack: lines.join("\n"), bundleFrames, mappedFrames };
+  return { stack: lines.join("\n"), bundleFrames, mappedFrames, growth };
 }

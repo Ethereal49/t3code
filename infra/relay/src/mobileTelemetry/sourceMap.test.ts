@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { decodeSourceMap, originalPositionFor, symbolicateStack } from "./sourceMap.ts";
 
+const NO_LIMIT = Number.POSITIVE_INFINITY;
+
 /**
  * `hermesc -O -emit-binary -output-source-map` output for HERMES_SOURCE, and
  * the stack the Hermes VM printed running it. Real Hermes output pins the
@@ -89,6 +91,7 @@ describe("symbolicateStack", () => {
     const result = symbolicateStack(
       `${HERMES_STACK}\n    at apply (native)\n    at tryCallOne (address at InternalBytecode.js:1:89)`,
       map,
+      NO_LIMIT,
     );
     expect(result).toEqual({
       stack: [
@@ -102,17 +105,18 @@ describe("symbolicateStack", () => {
       ].join("\n"),
       bundleFrames: 4,
       mappedFrames: 4,
+      growth: -50,
     });
   });
 
-  it("stops rewriting frames once the stack has grown by a megabyte", () => {
+  it("stops rewriting frames once the stack would grow past its budget", () => {
     const longSource = "a".repeat(64 * 1024);
     const map = decodeSourceMap({ version: 3, sources: [longSource], mappings: "AAAA" })!;
     const frames = Array.from(
       { length: 100 },
       () => "    at f (address at index.android.bundle:1:0)",
     );
-    const result = symbolicateStack(["Error", ...frames].join("\n"), map);
+    const result = symbolicateStack(["Error", ...frames].join("\n"), map, 1024 * 1024);
     expect(result.bundleFrames).toBe(100);
     expect(result.mappedFrames).toBe(16);
     expect(result.stack.length).toBeLessThan(1024 * 1024 + 100 * frames[0]!.length);
@@ -121,12 +125,19 @@ describe("symbolicateStack", () => {
   it("writes source paths verbatim, even ones that look like replacement patterns", () => {
     const map = decodeSourceMap({ version: 3, sources: ["$'/$&.js"], mappings: "AAAA" })!;
     const stack = "Error\n    at f (address at index.android.bundle:1:0) tail";
-    expect(symbolicateStack(stack, map).stack).toBe("Error\n    at f ($'/$&.js:1:1) tail");
+    expect(symbolicateStack(stack, map, NO_LIMIT).stack).toBe(
+      "Error\n    at f ($'/$&.js:1:1) tail",
+    );
   });
 
   it("leaves frames the map does not cover as they were", () => {
     const map = decodeSourceMap({ version: 3, sources: ["a.js"], mappings: "kBAAA" })!;
     const stack = "Error\n    at f (address at index.android.bundle:1:3)";
-    expect(symbolicateStack(stack, map)).toEqual({ stack, bundleFrames: 1, mappedFrames: 0 });
+    expect(symbolicateStack(stack, map, NO_LIMIT)).toEqual({
+      stack,
+      bundleFrames: 1,
+      mappedFrames: 0,
+      growth: 0,
+    });
   });
 });
