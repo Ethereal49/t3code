@@ -2668,7 +2668,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             thread,
             command,
             now,
-            latestRunOrdinal: projection.runs.at(-1)?.ordinal ?? null,
+            // Queued runs have not happened yet; counting them would hide the active one.
+            latestRunOrdinal:
+              projection.runs.filter((run) => run.status !== "queued").at(-1)?.ordinal ?? null,
           });
     if (Result.isFailure(decided)) {
       return yield* new OrchestratorDispatchError({

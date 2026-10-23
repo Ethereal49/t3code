@@ -17,9 +17,11 @@ import {
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -42,6 +44,7 @@ import {
 
 const SIGNING_SECRET_NAME = "guest-share-signing-key";
 const SNAPSHOT_ROW_LIMIT = 600;
+const HOST_RECHECK_INTERVAL = Duration.seconds(30);
 const SNAPSHOT_USER_TURN_LIMIT = 20;
 const WORKING_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set([
   "preparing",
@@ -329,10 +332,20 @@ const make = Effect.gen(function* () {
     const untilExpiry = Effect.sleep(
       Math.max(0, Date.parse(share.expiresAt) - DateTime.toEpochMillis(yield* DateTime.now)),
     );
+    // Unlinking T3 Connect must also end streams that are already open.
+    const untilHostLost = connectHostname.pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced(HOST_RECHECK_INTERVAL),
+        until: (current) => current !== share.host,
+      }),
+    );
     const snapshotEvent: GuestStreamEvent = { type: "snapshot", view: initialView, items };
     return Stream.concat(
       Stream.make(snapshotEvent),
-      Stream.concat(live.pipe(Stream.interruptWhen(untilExpiry)), Stream.make(ended)),
+      Stream.concat(
+        live.pipe(Stream.interruptWhen(Effect.race(untilExpiry, untilHostLost))),
+        Stream.make(ended),
+      ),
     ).pipe(Stream.takeUntil((event) => event.type === "ended"));
   });
 

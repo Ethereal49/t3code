@@ -10,9 +10,11 @@ import {
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
@@ -120,5 +122,22 @@ it.effect("refuses guest requests once T3 Connect no longer serves the link's ho
     yield* Ref.set(hostname, null);
     const submitted = yield* Effect.exit(guestShares.submit(session, { text: "Hello" }));
     assert.isTrue(Exit.isFailure(submitted));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("ends an open guest stream when T3 Connect stops serving the link's host", () =>
+  Effect.gen(function* () {
+    const { guestShares, credential } = yield* shareThread;
+    const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const collecting = yield* Stream.runCollect(yield* guestShares.stream(session)).pipe(
+      Effect.forkChild,
+    );
+    yield* Ref.set(hostname, null);
+    yield* TestClock.adjust("30 seconds");
+    const received = Array.from(yield* Fiber.join(collecting));
+    assert.deepEqual(
+      received.map((event) => event.type),
+      ["snapshot", "ended"],
+    );
   }).pipe(Effect.provide(layerTest)),
 );

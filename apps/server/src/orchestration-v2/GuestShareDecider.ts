@@ -4,7 +4,7 @@ import {
   GUEST_SHARE_HISTORY_RUNS,
   type GuestMessageId,
   type OrchestrationV2AppThread,
-  type OrchestrationV2Command,
+  type OrchestrationV2ServerCommand,
   type ThreadGuestMessage,
   type ThreadGuestShare,
 } from "@t3tools/contracts";
@@ -12,7 +12,7 @@ import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
 
 export type GuestShareCommand = Extract<
-  OrchestrationV2Command,
+  OrchestrationV2ServerCommand,
   {
     readonly type:
       | "thread.guest-share.open"

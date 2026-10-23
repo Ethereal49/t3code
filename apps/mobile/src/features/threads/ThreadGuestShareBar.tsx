@@ -123,7 +123,7 @@ export function ThreadGuestShareBar(props: {
           key={message.id}
           className="mx-3 mb-2 gap-2 rounded-xl border border-border bg-screen p-3"
         >
-          <Text className="text-sm text-foreground" numberOfLines={6}>
+          <Text className="text-sm text-foreground">
             <Text className="font-t3-medium">{guestName} (guest): </Text>
             {message.text}
           </Text>
