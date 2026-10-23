@@ -3,10 +3,16 @@ import {
   claimThreadOpen,
   handOffPick,
   nextShownOrder,
+  shownMessageCount,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
-import { foldSearchQuery, rankMessageMatches, pickedQuery } from "@t3tools/shared/paletteSearch";
+import {
+  foldSearchQuery,
+  PALETTE_MESSAGE_LIMIT,
+  pickedQuery,
+  rankMessageMatches,
+} from "@t3tools/shared/paletteSearch";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -199,15 +205,19 @@ export function useCommandPaletteThreadItems(input: {
   });
 
   // Rows already shown keep their places when a slower environment answers.
+  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, messageSearch.complete);
   const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
   const order = nextShownOrder(
     shownOrder,
     messageSearch.query,
     rankedMessageItems.map((item) => item.value),
+    shownCount,
   );
   if (order !== shownOrder) setShownOrder(order);
   const messageItemByValue = new Map(rankedMessageItems.map((item) => [item.value, item]));
-  const threadMessageItems = order.keys.flatMap((value) => messageItemByValue.get(value) ?? []);
+  const threadMessageItems = (
+    messageSearch.complete ? order.keys : order.keys.slice(0, shownCount)
+  ).flatMap((value) => messageItemByValue.get(value) ?? []);
 
   return { threadItems, threadMessageItems, now, isSearchPending: messageSearch.isPending };
 }

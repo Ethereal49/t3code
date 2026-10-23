@@ -397,6 +397,7 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
             message(threadId, "accented", "user", "Review Résumé indexing"),
             thread(addresses, project),
             message(addresses, "addresses", "user", "This addresses Résumé indexing"),
+            message(threadId, "spelled", "user", "Die Straße ist lang"),
           ],
           projections.apply,
           { discard: true },
@@ -410,6 +411,9 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
         for (const query of ["검색 기능", "がんばって", "部署", "fts", "enable"]) {
           assert.deepEqual(yield* threadIds(query), [threadId], query);
         }
+        // Letters the index spells out match either way they are typed.
+        assert.deepEqual(yield* threadIds("strasse"), [threadId]);
+        assert.deepEqual(yield* threadIds("straße"), [threadId]);
         // "res" inside "addresses" does not hide the accented word after it.
         assert.sameMembers(yield* threadIds("res"), [threadId, addresses]);
         // A word beats the same letters inside a longer word, even in an older message.

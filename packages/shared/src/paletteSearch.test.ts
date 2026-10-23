@@ -261,6 +261,8 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("fixuibug", threads)).toEqual(["Fix UI bug in sidebar"]);
     expect(rankTitles("lint", threads)).toEqual([]);
     expect(rankTitles("strasse", [thread("Straße bauen")])).toEqual(["Straße bauen"]);
+    // Joined words beat an earlier match inside a word.
+    expect(scoreThreadSearch("vscode", thread("Fixvscode and VS Code"), NOW)?.quality).toBe(0.6);
     // A strong match elsewhere does not hide joined words.
     expect(
       rankTitles("vscode", [
@@ -507,6 +509,15 @@ describe("recordThreadOpen", () => {
     ]);
   });
 
+  it("drops picks that no longer count when the thread is opened again", () => {
+    const opens = {
+      openedAt: NOW - 30 * DAY,
+      score: 1,
+      picks: [{ query: "old", at: NOW - 30 * DAY }],
+    };
+    expect(recordThreadOpen(opens, NOW, "new").picks).toEqual([{ query: "new", at: NOW }]);
+  });
+
   it("does not renew a query's pick when the thread is picked for another one", () => {
     const deploy = [
       thread("Deploy notes", {
@@ -596,6 +607,11 @@ describe("scoreMessageMatch", () => {
     // Text with a decomposed accent anywhere is folded to its end too.
     const decomposed = `e\u0301 ${"plain ".repeat(4000)}Résumé indexing`;
     expect(scoreMessageMatch(decomposed, "res")).toMatchObject({ offset: 24_003 });
+    // A ligature and a decomposed accent that leave the length equal by chance.
+    expect(
+      scoreMessageMatch("\ufb01x then Résumé driven, later cafe\u0301 stuff", "res"),
+    ).toMatchObject({ offset: 8 });
+    expect(scoreMessageMatch("Die Straße ist lang", "strasse")).toMatchObject({ offset: 4 });
     // A letter that grows when lowercased does not shift later offsets.
     expect(scoreMessageMatch("İ Enable fts and model", "fts")).toMatchObject({ offset: 9 });
     expect(scoreMessageMatch("İ Enable fts and model", "model")?.midWord).toBe(false);

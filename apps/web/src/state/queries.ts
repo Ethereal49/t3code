@@ -82,6 +82,8 @@ export function useThreadSearch(
 ): {
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   readonly query: string;
+  /** Every environment answered for `query`. */
+  readonly complete: boolean;
   readonly isPending: boolean;
 } {
   // A pasted wall of text searches by its start rather than failing the request.
@@ -100,17 +102,18 @@ export function useThreadSearch(
   // Show what fast environments returned rather than wait for a slow one.
   const ready =
     settledQuery !== null && (!result.isLoading || result.matches.length > 0)
-      ? { query: settledQuery, matches: result.matches }
+      ? { query: settledQuery, matches: result.matches, complete: !result.isLoading }
       : null;
   // Kept from earlier renders: React's pattern for information from previous renders.
   const [previous, setPrevious] = useState<SettledThreadSearch | null>(null);
   if (ready !== null && previous?.matches !== ready.matches) setPrevious(ready);
   const visible = canSearch
     ? visibleThreadSearch(normalizedQuery, ready, previous)
-    : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES };
+    : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES, complete: true };
   return {
     matches: visible.matches,
     query: visible.query,
+    complete: visible.complete,
     isPending,
   };
 }

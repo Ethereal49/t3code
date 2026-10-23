@@ -18,7 +18,9 @@ import * as SqlClient from "effect/sql/SqlClient";
  *
  * Triggers keep it in sync with every write to the messages table. Streaming
  * messages are indexed once they finish. Each text is indexed after a space,
- * so a search for a word after a boundary also finds a message's first word.
+ * so a search for a word after a boundary also finds a message's first word,
+ * and with the letters search spells out ("ß" as "ss"), which the tokenizer's
+ * accent folding does not cover.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -52,7 +54,7 @@ export default Effect.gen(function* () {
       )
     BEGIN
       INSERT INTO orchestration_v2_message_search (rowid, text)
-      SELECT new.rowid, ' ' || json_extract(new.payload_json, '$.text')
+      SELECT new.rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(new.payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
       WHERE json_extract(new.payload_json, '$.text') IS NOT NULL;
     END
   `;
@@ -65,7 +67,7 @@ export default Effect.gen(function* () {
     BEGIN
       DELETE FROM orchestration_v2_message_search WHERE rowid = old.rowid AND old.streaming = 0;
       INSERT INTO orchestration_v2_message_search (rowid, text)
-      SELECT new.rowid, ' ' || json_extract(new.payload_json, '$.text')
+      SELECT new.rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(new.payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
       WHERE new.streaming = 0
         AND (
           new.role = 'assistant'
@@ -84,7 +86,7 @@ export default Effect.gen(function* () {
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT rowid, ' ' || json_extract(payload_json, '$.text')
+    SELECT rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
     FROM orchestration_v2_projection_messages
     WHERE streaming = 0
       AND (

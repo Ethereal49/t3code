@@ -56,6 +56,17 @@ const LETTER_EXPANSIONS: Readonly<Record<string, string>> = {
   đ: "d",
 };
 
+/**
+ * `text` with the letters search spells out ("ß" as "ss"), as the message
+ * index stores them, so a typed "straße" also finds "Strasse".
+ */
+export function spellOutLetters(text: string): string {
+  return text.replace(
+    /[ßẞæÆœŒøØłŁđĐ]/gu,
+    (letter) => LETTER_EXPANSIONS[letter.toLowerCase()] ?? letter,
+  );
+}
+
 function foldCharacter(character: string): string {
   const folded = character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
   return LETTER_EXPANSIONS[folded] ?? folded;
@@ -255,7 +266,7 @@ function matchToken(
   }
   // Joined words are exact, so they count without the typo pass: a strong
   // match elsewhere must not hide "VS Code" for "vscode".
-  if (best === null && name) {
+  if ((best === null || best.score <= MID_WORD) && name) {
     const joined = matchJoinedWords(field, token);
     if (joined) return joined;
   }
@@ -578,6 +589,8 @@ export interface MessageMatch {
  */
 // Accents written as separate combining marks ("e" + "\u0301").
 const HAS_MARK = /\p{M}/u;
+// Letters `foldCharacter` expands, which native normalization does not.
+const EXPANDING_LETTER = /[ßẞæÆœŒøØłŁđĐ]/u;
 
 /** `text` lowercased without changing its length, so offsets stay valid ("İ" grows). */
 function lowerCaseInPlace(text: string): string {
@@ -606,7 +619,9 @@ interface FoldedMessage {
  */
 function foldMessage(text: string): FoldedMessage {
   const native = text.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
-  if (native.length === text.length) {
+  // Marks already in the text, or letters that expand, could leave the length
+  // equal by chance while positions shift.
+  if (native.length === text.length && !HAS_MARK.test(text) && !EXPANDING_LETTER.test(text)) {
     return {
       text: native,
       sourceAt: (index) => index,
@@ -823,7 +838,8 @@ export function recordThreadOpen(
   query: string | undefined,
 ): ThreadOpenStats {
   const pick = pickedQuery(query ?? "");
-  const earlier = previous?.picks ?? [];
+  // Picks that no longer count are not kept or synced.
+  const earlier = (previous?.picks ?? []).filter((entry) => at - entry.at <= PICK_WINDOW_MS);
   const picks = pick
     ? [{ query: pick, at }, ...earlier.filter((entry) => entry.query !== pick)].slice(
         0,

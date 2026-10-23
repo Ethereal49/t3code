@@ -22,6 +22,7 @@ import {
   rankSearchItems,
   scoreMessageMatch,
   scoreThreadSearch,
+  spellOutLetters,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -110,7 +111,7 @@ function buildMessageSearch(
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
   const indexed = hasIndex && long.every((token) => Array.from(token).length >= 3);
-  const phrase = (text: string) => `"${text.replaceAll('"', '""')}"`;
+  const phrase = (text: string) => `"${spellOutLetters(text).replaceAll('"', '""')}"`;
   return {
     match: indexed ? long.map(phrase).join(" ") : null,
     wordMatch: indexed

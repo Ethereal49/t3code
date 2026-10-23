@@ -203,33 +203,52 @@ export function threadSearchSubject(
 export interface ShownOrder {
   readonly query: string;
   readonly keys: ReadonlyArray<string>;
+  /** How many of `keys` were on screen; only those hold their places. */
+  readonly shown: number;
 }
 
 /**
  * The order to show message results in: rows already shown for this query
- * keep their places and new ones go below them, so a slower environment's
- * answer never moves a row under the pointer or the keyboard highlight.
- * Returns `previous` when nothing changed, so it can sit in React state.
+ * keep their places and the rest go below them in rank order, so a slower
+ * environment's answer never moves a row under the pointer or the keyboard
+ * highlight. `shownCount` is how many rows the box shows now. Returns
+ * `previous` when nothing changed, so it can sit in React state.
  */
 export function nextShownOrder(
   previous: ShownOrder | null,
   query: string,
   ranked: ReadonlyArray<string>,
+  shownCount: number,
 ): ShownOrder {
-  if (previous?.query !== query) return { query, keys: ranked };
+  if (previous?.query !== query) {
+    return { query, keys: ranked, shown: Math.min(shownCount, ranked.length) };
+  }
   const listed = new Set(ranked);
-  const kept = previous.keys.filter((key) => listed.has(key));
-  const shown = new Set(kept);
-  const keys = [...kept, ...ranked.filter((key) => !shown.has(key))];
+  const kept = previous.keys.slice(0, previous.shown).filter((key) => listed.has(key));
+  const held = new Set(kept);
+  const keys = [...kept, ...ranked.filter((key) => !held.has(key))];
+  const shown = Math.min(Math.max(shownCount, kept.length), keys.length);
   const unchanged =
+    shown === previous.shown &&
     keys.length === previous.keys.length &&
     keys.every((key, index) => key === previous.keys[index]);
-  return unchanged ? previous : { query, keys };
+  return unchanged ? previous : { query, keys, shown };
+}
+
+/**
+ * How many message rows a search box shows: half while slower environments
+ * still answer, so their best matches find a place below the rows already
+ * shown instead of past the end.
+ */
+export function shownMessageCount(limit: number, complete: boolean): number {
+  return complete ? limit : Math.ceil(limit / 2);
 }
 
 export interface SettledThreadSearch {
   readonly query: string;
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+  /** Every environment answered; otherwise slower ones may still add matches. */
+  readonly complete: boolean;
 }
 
 /**
@@ -251,5 +270,5 @@ export function visibleThreadSearch(
     before.length > 0 &&
     (current.startsWith(before) || before.startsWith(current))
     ? previous
-    : { query: "", matches: [] };
+    : { query: "", matches: [], complete: true };
 }

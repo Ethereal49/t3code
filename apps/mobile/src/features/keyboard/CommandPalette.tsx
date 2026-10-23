@@ -4,6 +4,7 @@ import {
   claimThreadOpen,
   handOffPick,
   nextShownOrder,
+  shownMessageCount,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
@@ -11,6 +12,7 @@ import {
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
   foldSearchQuery,
+  PALETTE_MESSAGE_LIMIT,
   rankMessageMatches,
   splitSearchText,
   pickedQuery,
@@ -439,9 +441,12 @@ export function CommandPalette(props: {
   }, [items, now, query, search.matches]);
   // Rows already shown keep their places when a slower environment answers.
   const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
-  const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys);
+  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, search.complete);
+  const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys, shownCount);
   if (messageOrder !== shownOrder) setShownOrder(messageOrder);
-  const messageMatchKeys = messageOrder.keys;
+  const messageMatchKeys = search.complete
+    ? messageOrder.keys
+    : messageOrder.keys.slice(0, shownCount);
   const results = useMemo(() => {
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
     // Recent threads leave out the open one, which would always lead them.

@@ -37,7 +37,8 @@ export const rebuildMessageSearch = Effect.fn("MessageSearchIndex.rebuild")(func
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT messages.rowid, ' ' || json_extract(messages.payload_json, '$.text')
+    SELECT messages.rowid, ' ' || replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(json_extract(messages.payload_json, '$.text'), 'ß', 'ss'), 'ẞ', 'ss'), 'æ', 'ae'), 'Æ', 'ae'), 'œ', 'oe'), 'Œ', 'oe'), 'ø', 'o'), 'Ø', 'o'), 'ł', 'l'), 'Ł', 'l'), 'đ', 'd'), 'Đ', 'd')
+      -- Keep in step with migration 69's triggers.
     FROM orchestration_v2_projection_messages AS messages
     WHERE ${indexedMessageCondition(sql)}
       AND json_extract(messages.payload_json, '$.text') IS NOT NULL
