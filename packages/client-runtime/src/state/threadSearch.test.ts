@@ -13,6 +13,7 @@ import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   threadSearchMatchKey,
+  threadSearchSubject,
   visibleThreadSearch,
 } from "./threadSearch.ts";
 
@@ -123,6 +124,21 @@ it("keeps the previous results visible only while a refined or widened query is 
   expect(visibleThreadSearch("billing", null, previous)).toEqual({ query: "", matches: [] });
   const ready = { query: "websocke", matches: [] };
   expect(visibleThreadSearch("websocke", ready, previous)).toBe(ready);
+});
+
+it("ranks recent threads by this client's own latest open", () => {
+  const thread = {
+    environmentId: envA,
+    id: ThreadId.make("thread-local"),
+    title: "Local",
+    branch: null,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-01T00:00:00.000Z",
+    latestUserMessageAt: null,
+    opens: { openedAt: 1_000, score: 1, queries: [] },
+  };
+  claimThreadOpen(envA, "thread-local", 5_000);
+  expect(threadSearchSubject(thread, null).opens?.openedAt).toBe(5_000);
 });
 
 it("sends one open per thread every ten minutes by this client's clock", () => {

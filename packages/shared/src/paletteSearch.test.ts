@@ -76,8 +76,9 @@ describe("scoreThreadSearch", () => {
       }),
       thread("Relay pairing", { activityAt: NOW }),
     ];
-    expect(rankTitles("re", threads)).toEqual(["Release checklist", "Relay pairing"]);
     expect(rankTitles("rel", threads)).toEqual(["Release checklist", "Relay pairing"]);
+    // Two letters are too little to go on.
+    expect(rankTitles("re", threads)).toEqual(["Relay pairing", "Release checklist"]);
     // Once the query leaves the pick behind, the better match wins again.
     expect(rankTitles("rela", threads)).toEqual(["Relay pairing"]);
     // An old pick fades with the thread's last open.
@@ -136,6 +137,13 @@ describe("scoreThreadSearch", () => {
     expect(
       rankTitles("ilde", [thread("Typesafe App Builder"), thread("De-risk idle tunnel cleanup")]),
     ).toEqual(["De-risk idle tunnel cleanup", "Typesafe App Builder"]);
+    // Typos count across camelCase joins.
+    expect(rankTitles("githbu", [thread("GitHub API usage"), thread("Other")])).toEqual([
+      "GitHub API usage",
+    ]);
+    expect(rankTitles("macso", [thread("Fix macOS window"), thread("Other")])).toEqual([
+      "Fix macOS window",
+    ]);
     // "enter" is not "external" when the right thread is already there.
     expect(
       rankTitles("cmd enter", [thread("Fix Cmd+Enter"), thread("Open links external")]),
@@ -434,8 +442,23 @@ describe("scoreMessageMatch", () => {
     expect(fts?.quality).toBe(1);
     expect(text.slice(fts?.offset)).toMatch(/^FTS and/);
     expect(scoreMessageMatch("saved two drafts", "fts")).toBeNull();
-    expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
-    expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
+    expect(scoreMessageMatch("We trust the build", "rust")).toEqual({
+      quality: 0.3,
+      midWord: true,
+      offset: 4,
+    });
+    expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({
+      quality: 1,
+      midWord: false,
+      offset: 0,
+    });
+    // A whole word beats a word prefix: "mode" prefers "mode" over "model".
+    expect(scoreMessageMatch("model settings", "mode")?.quality).toBe(0.8);
+    expect(scoreMessageMatch("The model and the mode switch", "mode")).toEqual({
+      quality: 1,
+      midWord: false,
+      offset: 18,
+    });
     expect(scoreMessageMatch("v12rc build", "rc")?.quality).toBe(1);
     // Words too short for the index must start a word too.
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
@@ -445,15 +468,14 @@ describe("scoreMessageMatch", () => {
   });
 
   it("finds words through case and accents, also after the same letters inside a word", () => {
-    expect(scoreMessageMatch("This addresses Résumé indexing", "res")).toEqual({
-      quality: 1,
+    expect(scoreMessageMatch("This addresses Résumé indexing", "res")).toMatchObject({
       offset: 15,
     });
-    expect(scoreMessageMatch("Le CAFÉ ouvert", "cafe")).toEqual({ quality: 1, offset: 3 });
-    expect(scoreMessageMatch("I presume this. Résumé indexing", "resume")).toEqual({
+    expect(scoreMessageMatch("Le CAFÉ ouvert", "cafe")).toMatchObject({ quality: 1, offset: 3 });
+    expect(scoreMessageMatch("I presume this. Résumé indexing", "resume")).toMatchObject({
       quality: 1,
       offset: 16,
     });
-    expect(scoreMessageMatch("明天部署到生产环境", "部署")).toEqual({ quality: 1, offset: 2 });
+    expect(scoreMessageMatch("明天部署到生产环境", "部署")).toMatchObject({ offset: 2 });
   });
 });

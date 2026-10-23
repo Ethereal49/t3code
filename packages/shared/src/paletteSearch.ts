@@ -117,12 +117,13 @@ function foldSearchField(source: string): SearchField {
 
 function prepareSearchField(source: string): SearchField {
   const cached = fieldCache.get(source);
-  // Re-inserting keeps recently read fields at the back, so eviction drops the oldest.
-  fieldCache.delete(source);
-  const field = cached ?? foldSearchField(source);
+  if (cached) return cached;
+  // Oldest first out. A read does not re-insert: that would cost more than the
+  // fold it saves, and the limit holds far more fields than a keystroke reads.
   if (fieldCache.size >= FIELD_CACHE_LIMIT) {
     fieldCache.delete(fieldCache.keys().next().value!);
   }
+  const field = foldSearchField(source);
   fieldCache.set(source, field);
   return field;
 }
@@ -217,7 +218,10 @@ function matchToken(
   if (!DIGIT.test(token)) {
     for (let index = 0; index < field.text.length; index++) {
       if (!field.wordStarts[index]) continue;
-      const word = field.text.slice(index, wordEnd(field, index));
+      // The whole run, across camelCase joins: "githbu" is "GitHub".
+      let runEnd = index + 1;
+      while (runEnd < field.text.length && ALPHANUMERIC.test(field.text[runEnd]!)) runEnd++;
+      const word = field.text.slice(index, runEnd);
       // Short tokens only forgive a swapped pair: any other edit of a three- or
       // four-letter word matches too much ("cron" would find every "con…").
       const swapOnly = token.length <= 4;
@@ -413,6 +417,7 @@ export function messageSearchTokens(query: string): {
 
 // A message token shorter than this must start a word: "fts" is not in "drafts".
 const MESSAGE_WORD_START_LENGTH = 4;
+const MESSAGE_PREFIX = 0.8;
 // Accented Latin letters by the letter they fold to: "e" -> "èéêë…".
 let accentedLettersCache: Map<string, string> | null = null;
 function accentedLetters(): Map<string, string> {
@@ -440,6 +445,11 @@ function accentedFormsOf(token: string): RegExp | null {
   return forms ? new RegExp(`[${forms}]`) : null;
 }
 
+// Whether a word ends right before `end` in `text`.
+function endsWordAt(text: string, end: number): boolean {
+  return end >= text.length || !ALPHANUMERIC.test(text[end]!) || startsWordAt(text, end);
+}
+
 function startsWordAt(text: string, index: number): boolean {
   const character = text[index]!;
   // A token that opens with punctuation (".ts", "#22889") brings its own boundary.
@@ -448,8 +458,13 @@ function startsWordAt(text: string, index: number): boolean {
 }
 
 export interface MessageMatch {
-  /** 1 when every token starts a word, MID_WORD when one only appears inside words. */
+  /**
+   * 1 when every token is a whole word, MESSAGE_PREFIX when one only starts
+   * a word ("mode" in "model"), MID_WORD when one only appears inside words.
+   */
   readonly quality: number;
+  /** A token only appears inside words, so the match ranks below word matches. */
+  readonly midWord: boolean;
   /** Where a snippet should start to show the match. */
   readonly offset: number;
 }
@@ -478,13 +493,16 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
     const accents = accentedFormsOf(token);
     let first = -1;
     let wordStart = -1;
+    let wholeWord = -1;
     for (
       let index = lowerText.indexOf(token);
-      index !== -1 && wordStart === -1;
+      index !== -1 && wholeWord === -1;
       index = lowerText.indexOf(token, index + 1)
     ) {
       if (first === -1) first = index;
-      if (startsWordAt(text, index)) wordStart = index;
+      if (!startsWordAt(text, index)) continue;
+      if (wordStart === -1) wordStart = index;
+      if (endsWordAt(text, index + token.length)) wholeWord = index;
     }
     if (first === -1 || (wordStart === -1 && accents?.test(text))) {
       // Folding is per character, so bound it for very long messages.
@@ -492,22 +510,32 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
       const foldedToken = foldSearchQuery(token);
       for (
         let index = folded.text.indexOf(foldedToken);
-        index !== -1 && wordStart === -1;
+        index !== -1 && wholeWord === -1;
         index = folded.text.indexOf(foldedToken, index + 1)
       ) {
         const source = folded.sourceIndex?.[index] ?? index;
         if (first === -1) first = source;
-        if (folded.wordStarts[index]) wordStart = source;
+        if (!folded.wordStarts[index]) continue;
+        if (wordStart === -1) wordStart = source;
+        const end = index + foldedToken.length;
+        if (
+          end === folded.text.length ||
+          folded.wordStarts[end] ||
+          !ALPHANUMERIC.test(folded.text[end]!)
+        ) {
+          wholeWord = source;
+        }
       }
     }
-    if (wordStart === -1) {
-      if (short) return null;
-      quality = MID_WORD;
-    }
-    const at = wordStart === -1 ? first : wordStart;
+    if (wordStart === -1 && short) return null;
+    quality = Math.min(
+      quality,
+      wholeWord !== -1 ? 1 : wordStart !== -1 ? MESSAGE_PREFIX : MID_WORD,
+    );
+    const at = wholeWord !== -1 ? wholeWord : wordStart !== -1 ? wordStart : first;
     if (at !== -1 && (offset === -1 || at < offset)) offset = at;
   }
-  return { quality, offset: Math.max(offset, 0) };
+  return { quality, midWord: quality <= MID_WORD, offset: Math.max(offset, 0) };
 }
 
 /**
@@ -689,7 +717,12 @@ function activePickAt(
 ): number | undefined {
   const pickedAt = thread.opens?.pickedAt;
   if (pickedAt === undefined || now - pickedAt > PICK_WINDOW_MS) return undefined;
-  return thread.opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
+  // The start of a picked query counts from three letters: "n" is too little
+  // to go on, and would flip the group order between keystrokes.
+  const prefix = normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
+  return thread.opens?.queries.some(
+    (pick) => pick === normalizedQuery || (prefix && pick.startsWith(normalizedQuery)),
+  )
     ? pickedAt
     : undefined;
 }

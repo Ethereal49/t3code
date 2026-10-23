@@ -440,8 +440,7 @@ export function CommandPalette(props: {
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
   }, [activeThread, items, now, query, search.matches]);
-  // The pick is an open with its query. The thread view also records the open;
-  // the server merges the two.
+  // The pick is an open with its query, so the thread view skips its own.
   const runResult = (item: CommandPaletteResult) => {
     const thread =
       item.kind === "thread" && query.trim() && !query.startsWith(">")

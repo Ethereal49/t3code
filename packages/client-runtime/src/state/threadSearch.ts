@@ -22,10 +22,17 @@ import { getThreadSortTimestamp } from "./threadSort.ts";
 // together than THREAD_OPEN_DEDUPE_MS anyway, so skipping them saves a command
 // and a broadcast while flipping between threads.
 const sentThreadOpens = new Map<string, number>();
+// When this client last opened each thread, sent or not, so recent threads
+// follow quick switches the server merges.
+const localThreadOpens = new Map<string, number>();
 
-/** Whether to send an open of a thread now; when it is, records that it was sent. */
+/**
+ * Records that this client opened a thread, and says whether to send the open
+ * to the server now.
+ */
 export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, now: number) {
   const key = `${environmentId}:${threadId}`;
+  localThreadOpens.set(key, now);
   if (now - (sentThreadOpens.get(key) ?? Number.NEGATIVE_INFINITY) < THREAD_OPEN_DEDUPE_MS) {
     return false;
   }
@@ -109,7 +116,14 @@ export function createThreadSearchResultsAtomFamily<E>(options: {
 
 export type ThreadSearchShell = Pick<
   EnvironmentThreadShell,
-  "id" | "title" | "branch" | "createdAt" | "updatedAt" | "latestUserMessageAt" | "opens"
+  | "environmentId"
+  | "id"
+  | "title"
+  | "branch"
+  | "createdAt"
+  | "updatedAt"
+  | "latestUserMessageAt"
+  | "opens"
 > &
   Partial<Pick<EnvironmentThreadShell, "pullRequests" | "linkedPullRequest" | "branchPullRequest">>;
 
@@ -123,6 +137,7 @@ export function threadSearchSubject(
   environmentLabel?: string | null,
 ): ThreadSearchSubject {
   const activityAt = getThreadSortTimestamp(thread, "updated_at");
+  const localOpenedAt = localThreadOpens.get(`${thread.environmentId}:${thread.id}`) ?? 0;
   return {
     id: thread.id,
     title: thread.title,
@@ -131,7 +146,11 @@ export function threadSearchSubject(
     environmentLabel: environmentLabel ?? null,
     pullRequests: threadSearchPullRequests(thread),
     activityAt: Number.isFinite(activityAt) ? activityAt : null,
-    opens: thread.opens ?? null,
+    // This client's own latest open counts too, though the server merged it.
+    opens:
+      thread.opens && localOpenedAt > thread.opens.openedAt
+        ? { ...thread.opens, openedAt: localOpenedAt }
+        : (thread.opens ?? null),
   };
 }
 

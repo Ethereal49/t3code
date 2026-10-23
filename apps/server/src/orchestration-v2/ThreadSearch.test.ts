@@ -135,6 +135,21 @@ const message = (
 });
 
 it.layer(layerTest)("ThreadSearch", (it) => {
+  it.effect("reads the newest hits without sorting all of them", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      for (const match of ['"needle"', null]) {
+        const plan = yield* sql<{
+          readonly detail: string;
+        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null })}`;
+        assert.isFalse(
+          plan.some((row) => row.detail.includes("TEMP B-TREE")),
+          plan.map((row) => row.detail).join("\n"),
+        );
+      }
+    }),
+  );
+
   it.effect("returns one finished user or assistant match per active thread", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -431,6 +446,12 @@ it.effect("starts snippets a few words before the first match so one line shows 
     assert.match(
       ThreadSearch.buildSearchSnippet(`${"word ".repeat(60)}un café`, "cafe"),
       /un café$/,
+    );
+    // A cut never splits an emoji's surrogate pair.
+    const emoji = ThreadSearch.buildSearchSnippet(`x${"🚀".repeat(200)}needle`, "needle");
+    assert.notMatch(
+      emoji,
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
     );
     // Short text still moves a late match into view.
     assert.equal(
