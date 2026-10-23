@@ -223,13 +223,15 @@ export function symbolicateStack(stack: string, map: CompactSourceMap): Symbolic
     const match = BUNDLE_FRAME.exec(line);
     if (!match) return line;
     bundleFrames += 1;
+    if (growth > MAX_STACK_GROWTH) return line;
     const position = originalPositionFor(map, Number(match[2]), Number(match[3]));
     if (!position) return line;
-    const location = `${position.source}:${position.line}:${position.column + 1}`;
-    growth += location.length - match[0].length;
+    const lineAndColumn = `:${position.line}:${position.column + 1}`;
+    // Checked before the location string exists, so a long path costs nothing once over.
+    growth += position.source.length + lineAndColumn.length - match[0].length;
     if (growth > MAX_STACK_GROWTH) return line;
     mappedFrames += 1;
-    return line.replace(match[0], location);
+    return line.replace(match[0], position.source + lineAndColumn);
   });
   return { stack: lines.join("\n"), bundleFrames, mappedFrames };
 }
