@@ -135,7 +135,7 @@ it("ranks recent threads by this client's own latest open", () => {
     createdAt: "2026-10-01T00:00:00.000Z",
     updatedAt: "2026-10-01T00:00:00.000Z",
     latestUserMessageAt: null,
-    opens: { openedAt: 1_000, score: 1, queries: [] },
+    opens: { openedAt: 1_000, score: 1, picks: [] },
   };
   claimThreadOpen(envA, "thread-local", 5_000);
   expect(threadSearchSubject(thread, null).opens?.openedAt).toBe(5_000);

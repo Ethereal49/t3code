@@ -72,7 +72,12 @@ function hasCjkWord(token: string): boolean {
  * ("" at the start): after a non-letter, at a camelCase or digit boundary, or
  * at any Chinese or Japanese character. The one rule for titles and messages.
  */
-function isWordStart(beforePrevious: string, previous: string, character: string): boolean {
+function isWordStart(
+  beforePrevious: string,
+  previous: string,
+  character: string,
+  next: string,
+): boolean {
   // "Julius’s": a possessive or contraction does not start a word.
   const afterApostrophe = APOSTROPHE.test(previous) && ALPHANUMERIC.test(beforePrevious);
   return (
@@ -81,6 +86,8 @@ function isWordStart(beforePrevious: string, previous: string, character: string
     (previous === "" ||
       !ALPHANUMERIC.test(previous) ||
       (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
+      // The last capital of an acronym starts the next word: "JSONSchema".
+      (UPPERCASE.test(previous) && UPPERCASE.test(character) && LOWERCASE.test(next)) ||
       DIGIT.test(previous) !== DIGIT.test(character) ||
       isCjk(character))
   );
@@ -94,8 +101,14 @@ function foldSearchField(source: string): SearchField {
   let previous = "";
   let beforePrevious = "";
   let index = 0;
-  for (const character of source) {
-    const startsWord = isWordStart(beforePrevious, previous, character);
+  const characters = Array.from(source);
+  for (const [position, character] of characters.entries()) {
+    const startsWord = isWordStart(
+      beforePrevious,
+      previous,
+      character,
+      characters[position + 1] ?? "",
+    );
     const folded = foldCharacter(character);
     identity &&= folded.length === 1 && character.length === 1;
     for (let offset = 0; offset < folded.length; offset++) {
@@ -196,12 +209,14 @@ function matchToken(
   initials: boolean,
 ): TokenMatch | null {
   let best: TokenMatch | null = null;
+  const ownBoundary = !ALPHANUMERIC.test(token[0]!) && !SYMBOL.test(token[0]!);
   for (
     let index = field.text.indexOf(token);
     index !== -1;
     index = field.text.indexOf(token, index + 1)
   ) {
-    if (field.wordStarts[index]) {
+    // A token that opens with punctuation (".ts") brings its own boundary, as in messages.
+    if (field.wordStarts[index] || ownBoundary) {
       const wordLength = wordEnd(field, index) - index;
       const score =
         token.length >= wordLength ? WHOLE_WORD : 0.7 + (0.2 * token.length) / wordLength;
@@ -454,7 +469,12 @@ function startsWordAt(text: string, index: number): boolean {
   const character = text[index]!;
   // A token that opens with punctuation (".ts", "#22889") brings its own boundary.
   if (!ALPHANUMERIC.test(character) && !SYMBOL.test(character)) return true;
-  return isWordStart(text[index - 2] ?? "", text[index - 1] ?? "", character);
+  return isWordStart(
+    text[index - 2] ?? "",
+    text[index - 1] ?? "",
+    character,
+    text[index + 1] ?? "",
+  );
 }
 
 export interface MessageMatch {
@@ -628,19 +648,18 @@ export function recordThreadOpen(
   query: string | undefined,
 ): ThreadOpenStats {
   const pick = pickedQuery(foldSearchQuery(query ?? ""));
-  const queries = pick
-    ? [pick, ...(previous?.queries ?? []).filter((existing) => existing !== pick)].slice(
+  const earlier = previous?.picks ?? [];
+  const picks = pick
+    ? [{ query: pick, at }, ...earlier.filter((entry) => entry.query !== pick)].slice(
         0,
         THREAD_SEARCH_PICK_LIMIT,
       )
-    : (previous?.queries ?? []);
-  const pickedAt = pick ? at : previous?.pickedAt;
-  const picks = pickedAt === undefined ? {} : { pickedAt };
+    : earlier;
   if (previous !== null && at - previous.openedAt < THREAD_OPEN_DEDUPE_MS) {
-    return { ...previous, ...picks, queries };
+    return { ...previous, picks };
   }
   const score = previous === null ? 1 : previous.score * decay(at - previous.openedAt) + 1;
-  return { openedAt: at, ...picks, score, queries };
+  return { openedAt: at, score, picks };
 }
 
 export interface ThreadSearchSubject {
@@ -715,16 +734,17 @@ function activePickAt(
   normalizedQuery: string,
   now: number,
 ): number | undefined {
-  const pickedAt = thread.opens?.pickedAt;
-  if (pickedAt === undefined || now - pickedAt > PICK_WINDOW_MS) return undefined;
   // The start of a picked query counts from three letters: "n" is too little
   // to go on, and would flip the group order between keystrokes.
   const prefix = normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
-  return thread.opens?.queries.some(
-    (pick) => pick === normalizedQuery || (prefix && pick.startsWith(normalizedQuery)),
-  )
-    ? pickedAt
-    : undefined;
+  let latest: number | undefined;
+  for (const pick of thread.opens?.picks ?? []) {
+    if (now - pick.at > PICK_WINDOW_MS) continue;
+    if (pick.query === normalizedQuery || (prefix && pick.query.startsWith(normalizedQuery))) {
+      latest = Math.max(latest ?? pick.at, pick.at);
+    }
+  }
+  return latest;
 }
 
 export interface ThreadSearchMatch {

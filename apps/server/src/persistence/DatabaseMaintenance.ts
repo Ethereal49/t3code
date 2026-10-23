@@ -32,7 +32,7 @@ const rebuildMessageSearch = Effect.fn("DatabaseMaintenance.rebuildMessageSearch
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT messages.rowid, json_extract(messages.payload_json, '$.text')
+    SELECT messages.rowid, ' ' || json_extract(messages.payload_json, '$.text')
     FROM orchestration_v2_projection_messages AS messages
     WHERE ${indexedMessageCondition(sql)}
       AND json_extract(messages.payload_json, '$.text') IS NOT NULL

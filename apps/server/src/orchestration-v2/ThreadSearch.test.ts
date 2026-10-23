@@ -269,6 +269,41 @@ it.layer(layerTest)("ThreadSearch", (it) => {
 });
 
 it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
+  it.effect("finds older words when the newest hits only hold the fragment inside words", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:fragments");
+      yield* createProject(project);
+      const older = [
+        ["start", "Ingest the logs first"],
+        ["newline", "Plan:\ningest the logs"],
+        ["paren", "Run the job (ingest only)"],
+        ["space", "Then ingest the logs"],
+      ] as const;
+      const busy = ThreadId.make("thread:fragment-busy");
+      yield* Effect.forEach(
+        [
+          ...older.flatMap(([key, text]) => [
+            thread(ThreadId.make(`thread:fragment-${key}`), project),
+            message(ThreadId.make(`thread:fragment-${key}`), `fragment-${key}`, "user", text),
+          ]),
+          thread(busy, project),
+          ...Array.from({ length: 2000 }, (_, index) =>
+            message(busy, `fragment-busy-${index}`, "assistant", "still working on it"),
+          ),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "ing" });
+      assert.sameMembers(
+        matches.map((match) => match.threadId),
+        older.map(([key]) => ThreadId.make(`thread:fragment-${key}`)),
+      );
+    }),
+  );
+
   it.effect("finds a visible match behind hundreds of hidden or narrower hits", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

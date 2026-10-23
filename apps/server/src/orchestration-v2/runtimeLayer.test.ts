@@ -5583,18 +5583,19 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("thread opens", (it) 
         yield* visit({ opened: true, searchQuery: "  Upl " });
         assert.deepEqual(yield* opens, {
           openedAt: start,
-          pickedAt: start,
           score: 1,
-          queries: ["upl"],
+          picks: [{ query: "upl", at: start }],
         });
 
         yield* TestClock.adjust("1 minute");
         yield* visit({ opened: true, searchQuery: "Uploadthing docs" });
         assert.deepEqual(yield* opens, {
           openedAt: start,
-          pickedAt: start + 60_000,
           score: 1,
-          queries: ["uploadthing docs", "upl"],
+          picks: [
+            { query: "uploadthing docs", at: start + 60_000 },
+            { query: "upl", at: start },
+          ],
         });
 
         yield* TestClock.adjust("14 days");
@@ -5603,9 +5604,11 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("thread opens", (it) 
         const later = yield* opens;
         assert.closeTo(later!.score, 1 + 2 ** (-(14 * 24 * 60 + 1) / (14 * 24 * 60)), 1e-9);
         assert.equal(later!.openedAt, DateTime.toEpochMillis(yield* DateTime.now));
-        assert.deepEqual(later!.queries, ["uploadthing docs", "upl"]);
-        // Opening without a query keeps the time of the last pick.
-        assert.equal(later!.pickedAt, start + 60_000);
+        // Opening without a query keeps each pick and its time.
+        assert.deepEqual(later!.picks, [
+          { query: "uploadthing docs", at: start + 60_000 },
+          { query: "upl", at: start },
+        ]);
       }),
   );
 });

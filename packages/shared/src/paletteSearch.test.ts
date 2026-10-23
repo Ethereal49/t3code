@@ -47,6 +47,9 @@ describe("scoreThreadSearch", () => {
     expect(starts("useThreadSearch hook", "search")).toEqual([{ start: 9, end: 15 }]);
     expect(starts("fix/sidebar-perf", "perf")).toEqual([{ start: 12, end: 16 }]);
     expect(starts("Upgrade to pnpm12", "12")).toEqual([{ start: 15, end: 17 }]);
+    expect(starts("Fix JSONSchema parsing", "sch")).toEqual([{ start: 8, end: 11 }]);
+    expect(starts("Fix HTTPServer crash", "ser")).toEqual([{ start: 8, end: 11 }]);
+    expect(starts("Rename index.ts", ".ts")).toEqual([{ start: 12, end: 15 }]);
     // Short tokens never match mid-word.
     expect(scoreThreadSearch("ci", thread("Decision log"), NOW)).toBeNull();
   });
@@ -63,7 +66,7 @@ describe("scoreThreadSearch", () => {
         thread("Goldbug processes", { activityAt: NOW - DAY }),
         thread("Goldbug notes", {
           activityAt: NOW - 40 * DAY,
-          opens: { openedAt: NOW - DAY, score: 12, queries: [] },
+          opens: { openedAt: NOW - DAY, score: 12, picks: [] },
         }),
       ]),
     ).toEqual(["Goldbug notes", "Goldbug processes"]);
@@ -72,7 +75,7 @@ describe("scoreThreadSearch", () => {
   it("puts the thread picked for a query first when that query is typed again", () => {
     const threads = [
       thread("Release checklist", {
-        opens: { openedAt: NOW - 5 * DAY, pickedAt: NOW - 5 * DAY, score: 1, queries: ["rel"] },
+        opens: { openedAt: NOW - 5 * DAY, score: 1, picks: [{ query: "rel", at: NOW - 5 * DAY }] },
       }),
       thread("Relay pairing", { activityAt: NOW }),
     ];
@@ -84,7 +87,11 @@ describe("scoreThreadSearch", () => {
     // An old pick fades with the thread's last open.
     const stale = [
       thread("Release checklist", {
-        opens: { openedAt: NOW - 90 * DAY, pickedAt: NOW - 90 * DAY, score: 1, queries: ["rel"] },
+        opens: {
+          openedAt: NOW - 90 * DAY,
+          score: 1,
+          picks: [{ query: "rel", at: NOW - 90 * DAY }],
+        },
       }),
       thread("Relay pairing", { activityAt: NOW }),
     ];
@@ -92,20 +99,20 @@ describe("scoreThreadSearch", () => {
     // Opening an old pick some other way does not revive it over a newer pick.
     const reopened = [
       thread("Release checklist", {
-        opens: { openedAt: NOW - DAY, pickedAt: NOW - 30 * DAY, score: 2, queries: ["rel"] },
+        opens: { openedAt: NOW - DAY, score: 2, picks: [{ query: "rel", at: NOW - 30 * DAY }] },
       }),
       thread("Relay pairing", {
-        opens: { openedAt: NOW - DAY, pickedAt: NOW - DAY, score: 1, queries: ["rel"] },
+        opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "rel", at: NOW - DAY }] },
       }),
     ];
     expect(rankTitles("rel", reopened)).toEqual(["Relay pairing", "Release checklist"]);
     // The latest pick for a query wins over an earlier one with a better title match.
     const repicked = [
       thread("Deploy", {
-        opens: { openedAt: NOW - DAY, pickedAt: NOW - DAY, score: 1, queries: ["deploy"] },
+        opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "deploy", at: NOW - DAY }] },
       }),
       thread("Deploy timeout on Railway", {
-        opens: { openedAt: NOW, pickedAt: NOW, score: 1, queries: ["deploy"] },
+        opens: { openedAt: NOW, score: 1, picks: [{ query: "deploy", at: NOW }] },
       }),
     ];
     expect(rankTitles("deploy", repicked)).toEqual(["Deploy timeout on Railway", "Deploy"]);
@@ -220,7 +227,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
 
   it("lists a thread picked for a query even when only its messages matched", () => {
     const picked = thread("Hosting alternatives", {
-      opens: { openedAt: NOW - DAY, pickedAt: NOW - DAY, score: 1, queries: ["tigris"] },
+      opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "tigris", at: NOW - DAY }] },
     });
     expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
     expect(rankTitles("ti", [picked])).toEqual([]);
@@ -301,7 +308,7 @@ describe("rankMessageMatches", () => {
       [
         "b1",
         thread("B picked", {
-          opens: { openedAt: NOW, pickedAt: NOW, score: 1, queries: ["needle"] },
+          opens: { openedAt: NOW, score: 1, picks: [{ query: "needle", at: NOW }] },
         }),
       ],
     ]);
@@ -320,7 +327,7 @@ describe("rankMessageMatches", () => {
   it("keeps matches inside words below word matches, however used", () => {
     const busy = thread("Busy", {
       activityAt: NOW,
-      opens: { openedAt: NOW, score: 20, queries: [] },
+      opens: { openedAt: NOW, score: 20, picks: [] },
     });
     const quiet = thread("Quiet");
     const matches = [
@@ -386,14 +393,14 @@ describe("rankSearchGroups with keywords and picks", () => {
       ).map(({ group }) => group);
     const named = thread("Trim MCP model lists");
     const picked = thread("Trim MCP model lists", {
-      opens: { openedAt: NOW, pickedAt: NOW, score: 1, queries: ["mcp"] },
+      opens: { openedAt: NOW, score: 1, picks: [{ query: "mcp", at: NOW }] },
     });
     expect(rank(["Restart agent session", "reload", "mcp"], named)).toEqual(["threads", "actions"]);
     // A command named for the query stays first, unless the thread was picked for it.
     expect(rank(["Reload MCP servers"], named)).toEqual(["actions", "threads"]);
     expect(rank(["Reload MCP servers"], picked)).toEqual(["threads", "actions"]);
     const oldPick = thread("Trim MCP model lists", {
-      opens: { openedAt: NOW, pickedAt: NOW - 60 * DAY, score: 1, queries: ["mcp"] },
+      opens: { openedAt: NOW, score: 1, picks: [{ query: "mcp", at: NOW - 60 * DAY }] },
     });
     expect(rank(["Reload MCP servers"], oldPick)).toEqual(["actions", "threads"]);
   });
@@ -402,22 +409,44 @@ describe("rankSearchGroups with keywords and picks", () => {
 describe("recordThreadOpen", () => {
   it("decays the open count, merges quick reopens, and keeps the latest picked queries", () => {
     const first = recordThreadOpen(null, NOW, "  Upl ");
-    expect(first).toEqual({ openedAt: NOW, pickedAt: NOW, score: 1, queries: ["upl"] });
+    expect(first).toEqual({ openedAt: NOW, score: 1, picks: [{ query: "upl", at: NOW }] });
     const reopened = recordThreadOpen(first, NOW + 60_000, "uploadthing");
     expect(reopened).toEqual({
       openedAt: NOW,
-      pickedAt: NOW + 60_000,
       score: 1,
-      queries: ["uploadthing", "upl"],
+      picks: [
+        { query: "uploadthing", at: NOW + 60_000 },
+        { query: "upl", at: NOW },
+      ],
     });
     const later = recordThreadOpen(reopened, NOW + SEARCH_RECENCY_HALF_LIFE_MS, "x".repeat(50));
     expect(later.score).toBe(1.5);
-    expect(later.queries).toEqual(["x".repeat(32), "uploadthing", "upl"]);
-    expect(recordThreadOpen(later, later.openedAt + DAY, "upl").queries).toEqual([
-      "upl",
-      "x".repeat(32),
-      "uploadthing",
+    expect(later.picks.map((pick) => pick.query)).toEqual(["x".repeat(32), "uploadthing", "upl"]);
+    const repicked = recordThreadOpen(later, later.openedAt + DAY, "upl");
+    expect(repicked.picks).toEqual([
+      { query: "upl", at: later.openedAt + DAY },
+      { query: "x".repeat(32), at: later.openedAt },
+      { query: "uploadthing", at: NOW + 60_000 },
     ]);
+  });
+
+  it("does not renew a query's pick when the thread is picked for another one", () => {
+    const deploy = [
+      thread("Deploy notes", {
+        opens: {
+          openedAt: NOW,
+          score: 2,
+          picks: [
+            { query: "scripts", at: NOW },
+            { query: "deploy", at: NOW - 60 * DAY },
+          ],
+        },
+      }),
+      thread("Deploy timeout", {
+        opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "deploy", at: NOW - DAY }] },
+      }),
+    ];
+    expect(rankTitles("deploy", deploy)).toEqual(["Deploy timeout", "Deploy notes"]);
   });
 });
 
@@ -460,6 +489,7 @@ describe("scoreMessageMatch", () => {
       offset: 18,
     });
     expect(scoreMessageMatch("v12rc build", "rc")?.quality).toBe(1);
+    expect(scoreMessageMatch("Fix the CLIAdapter state", "ada")?.quality).toBe(0.8);
     // Words too short for the index must start a word too.
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
     expect(scoreMessageMatch("Upgrade pnpm 512 today", "pnpm 12")).toBeNull();

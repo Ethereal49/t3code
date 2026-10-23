@@ -65,6 +65,31 @@ const MESSAGE_HIT_LIMIT = 2000;
 // Without the index, how many of the newest messages a search scans.
 const MESSAGE_SCAN_LIMIT = 20_000;
 
+// What can come right before a word, for the index pass that finds words a
+// common fragment's newest hits missed. Indexed text starts with a space, so
+// a message's first word counts. camelCase joins ("enableIngest") are left to
+// the newest hits: the index ignores case.
+const WORD_BOUNDARIES = [
+  " ",
+  "\n",
+  "\t",
+  "(",
+  "[",
+  "{",
+  "`",
+  '"',
+  "'",
+  "/",
+  "-",
+  "_",
+  ".",
+  ":",
+  "#",
+  "@",
+  "*",
+  ">",
+];
+
 /**
  * The SQL inputs for a message search, or null when the query has no token
  * long enough to search. Tokens of three or more characters go to the
@@ -84,11 +109,16 @@ function buildMessageSearch(
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
   const indexed = hasIndex && long.every((token) => Array.from(token).length >= 3);
-  const phrases = (prefix: string) =>
-    long.map((token) => `"${prefix}${token.replaceAll('"', '""')}"`).join(" ");
+  const phrase = (text: string) => `"${text.replaceAll('"', '""')}"`;
   return {
-    match: indexed ? phrases("") : null,
-    wordMatch: indexed ? phrases(" ") : null,
+    match: indexed ? long.map(phrase).join(" ") : null,
+    wordMatch: indexed
+      ? long
+          .map(
+            (token) => `(${WORD_BOUNDARIES.map((before) => phrase(before + token)).join(" OR ")})`,
+          )
+          .join(" AND ")
+      : null,
     substrings: indexed ? short : [...long, ...short],
   };
 }

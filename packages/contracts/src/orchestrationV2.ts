@@ -372,15 +372,17 @@ export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitReco
 
 /**
  * How often the user opens a thread, for search ranking. `score` is an open
- * count that halves every two weeks, as of `openedAt`. `queries` holds the last
- * few palette queries that picked the thread, folded to lowercase, last picked
- * at `pickedAt`. Times are epoch milliseconds: ranking does arithmetic on them.
+ * count that halves every two weeks, as of `openedAt`. `picks` holds the last
+ * few palette queries that picked the thread, folded to lowercase, newest
+ * first, each with when it was picked. Times are epoch milliseconds: ranking
+ * does arithmetic on them.
  */
 export const OrchestrationV2ThreadOpens = Schema.Struct({
   openedAt: Schema.Finite,
-  pickedAt: Schema.optional(Schema.Finite),
   score: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  queries: Schema.Array(Schema.String.check(Schema.isMaxLength(32))).check(Schema.isMaxLength(3)),
+  picks: Schema.Array(
+    Schema.Struct({ query: Schema.String.check(Schema.isMaxLength(32)), at: Schema.Finite }),
+  ).check(Schema.isMaxLength(3)),
 });
 export type OrchestrationV2ThreadOpens = typeof OrchestrationV2ThreadOpens.Type;
 
