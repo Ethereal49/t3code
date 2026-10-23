@@ -306,6 +306,36 @@ describe("buildThreadActionItems", () => {
     expect(labels("pnpm up")).toEqual(["Threads"]);
   });
 
+  it("lists a project above threads that only hold its name when the name is typed", () => {
+    const threadSearchItems = buildThreadActionItems({
+      threads: [makeThread({ title: "Lakebed performance gains" })],
+      projectByKey: new Map(),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async () => undefined,
+    });
+    const projectSearchItems = [
+      {
+        kind: "action" as const,
+        value: "project:lakebed",
+        searchTerms: ["Lakebed", "/code/lakebed"],
+        title: "Lakebed",
+        icon: null,
+        run: async () => undefined,
+      },
+    ];
+    const labels = (query: string) =>
+      filterCommandPaletteGroups({
+        activeGroups: [],
+        query,
+        isInSubmenu: false,
+        projectSearchItems,
+        threadSearchItems,
+      }).map((group) => group.label);
+    expect(labels("lakebed")).toEqual(["Projects", "Threads"]);
+    expect(labels("lake")).toEqual(["Threads", "Projects"]);
+  });
+
   it("keeps a command first over a thread in daily use that matches as well", () => {
     const now = Date.parse("2026-10-23T00:00:00.000Z");
     const threadSearchItems = buildThreadActionItems({

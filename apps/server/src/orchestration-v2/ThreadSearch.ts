@@ -17,12 +17,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
-  decay,
   messageSearchTokens,
   foldSearchQuery,
   rankMessageMatches,
   rankSearchItems,
-  messageMatchWeight,
   scoreMessageMatch,
   scoreThreadSearch,
   type ThreadSearchSubject,
@@ -326,16 +324,13 @@ export const make = Effect.gen(function* () {
       }
       if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
     }
-    const now = DateTime.toEpochMillis(yield* DateTime.now);
-    const relevance = (hit: Hit) =>
-      messageMatchWeight(hitCount(hit.row.threadId)) *
-      (1 + decay(now - Date.parse(hit.row.messageCreatedAt ?? "")));
-    // Match quality first, then how much the thread uses the word and how
-    // recently; a missing time counts as old.
+    // Clients rank these again with use and picks (`rankMessageMatches`), so
+    // this order only picks which threads come back: match quality, then how
+    // much the thread uses the word, then the newest.
     const ranked = [...best.values()].sort(
       (left, right) =>
         right.quality - left.quality ||
-        (relevance(right) || 0) - (relevance(left) || 0) ||
+        hitCount(right.row.threadId) - hitCount(left.row.threadId) ||
         newer(left, right),
     );
     return {

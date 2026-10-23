@@ -650,8 +650,7 @@ export function pickedQuery(query: string): string {
   return (/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut).trim();
 }
 
-/** How much something `ageMs` old still counts: 1 now, half after two weeks. */
-export function decay(ageMs: number): number {
+function decay(ageMs: number): number {
   return 2 ** (-Math.max(0, ageMs) / SEARCH_RECENCY_HALF_LIFE_MS);
 }
 
@@ -904,7 +903,7 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
  * thread that keeps using the word outweighs a recent passing mention, as
  * hits count for more than recency or use (21 hits about 5.5, one hit 2).
  */
-export function messageMatchWeight(hits: number): number {
+function messageMatchWeight(hits: number): number {
   return 1 + Math.log2(1 + hits);
 }
 
@@ -959,13 +958,14 @@ export const PALETTE_MESSAGE_LIMIT = 10;
 /** Next to matching threads, other groups show only their best few rows. */
 export const PALETTE_SECONDARY_LIMIT = 3;
 
-// Every token at a word start of a main field (0.7 and up), a typo in a main
-// field (0.4 and up), or weaker. Whole word against prefix is too fine a line
-// for group order: "compact" must not lift a setting named "Compact…" over the
-// thread "Compaction…". But "keybindngs" is the setting of that name, not a
-// command that lists it as a keyword.
+// The whole name typed (1.5 and up), every token at a word start of a main
+// field (0.7 and up), a typo in a main field (0.4 and up), or weaker. Whole
+// word against prefix is too fine a line for group order: "compact" must not
+// lift a setting named "Compact…" over the thread "Compaction…". But the
+// project named "lakebed" leads for "lakebed", and "keybindngs" is the setting
+// of that name, not a command that lists it as a keyword.
 function matchClass(quality: number): number {
-  return quality >= 0.7 ? 2 : quality >= 0.4 ? 1 : 0;
+  return quality >= 1.5 ? 3 : quality >= 0.7 ? 2 : quality >= 0.4 ? 1 : 0;
 }
 
 export interface RankedSearchItem<T, M> {

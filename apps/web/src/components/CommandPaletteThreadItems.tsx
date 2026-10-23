@@ -201,7 +201,12 @@ export function useCommandPaletteThreadItems(input: {
           requestThreadFindQuery(
             scopedThreadKey(scopeThreadRef(match.environmentId, match.threadId)),
             {
-              query: messageSearchTokens(messageSearch.query).long[0] ?? messageSearch.query,
+              // The longest word, as the most telling: "sidebar" in "fix sidebar".
+              query:
+                messageSearchTokens(messageSearch.query).long.reduce(
+                  (longest, token) => (token.length > longest.length ? token : longest),
+                  "",
+                ) || messageSearch.query,
               ...(match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {}),
             },
           );
