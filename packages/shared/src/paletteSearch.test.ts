@@ -50,6 +50,10 @@ describe("scoreThreadSearch", () => {
     expect(starts("Fix JSONSchema parsing", "sch")).toEqual([{ start: 8, end: 11 }]);
     expect(starts("Fix HTTPServer crash", "ser")).toEqual([{ start: 8, end: 11 }]);
     expect(starts("Rename index.ts", ".ts")).toEqual([{ start: 12, end: 15 }]);
+    // A match is whole only where a word ends: "githuba" does not fill "GitHubActions".
+    expect(scoreThreadSearch("githuba", thread("GitHubActions setup"), NOW)?.quality).toBeLessThan(
+      1,
+    );
     expect(rankTitles(".ts", [thread("Fix parser.tsx"), thread("Rename index.ts")])).toEqual([
       "Rename index.ts",
       "Fix parser.tsx",
@@ -122,6 +126,26 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("deploy", repicked)).toEqual(["Deploy timeout on Railway", "Deploy"]);
   });
 
+  it("ranks a title holding the words above the app's own branch prefix and project name", () => {
+    const busy = { activityAt: NOW, opens: { openedAt: NOW, score: 6, picks: [] } };
+    expect(
+      rankTitles("t3 connect", [
+        thread("Diagnose Connect provisioning failures", {
+          ...busy,
+          branch: "t3/diagnose-connect",
+          projectTitle: "t3code",
+        }),
+        thread("T3 Connect Tunnel Lifecycle Review", { projectTitle: "t3code" }),
+      ])[0],
+    ).toBe("T3 Connect Tunnel Lifecycle Review");
+    expect(
+      rankTitles("t3code", [
+        thread("Fix sidebar lag", { ...busy, projectTitle: "t3code", branch: "t3code/sidebar" }),
+        thread("T3 Code vs Gemini Token Volume", { projectTitle: "slophouse" }),
+      ])[0],
+    ).toBe("T3 Code vs Gemini Token Volume");
+  });
+
   it("matches pull request numbers, branches, and projects with every token somewhere", () => {
     const subject = thread("Trim model lists", {
       branch: "t3/trim-mcp-models",
@@ -148,6 +172,8 @@ describe("scoreThreadSearch", () => {
     expect(
       rankTitles("ilde", [thread("Typesafe App Builder"), thread("De-risk idle tunnel cleanup")]),
     ).toEqual(["De-risk idle tunnel cleanup", "Typesafe App Builder"]);
+    // "ing" is not "Nightly": a three-letter typo keeps the first letter.
+    expect(rankTitles("ing", [thread("Nightly build fix")])).toEqual([]);
     // Typos count across camelCase joins.
     expect(rankTitles("githbu", [thread("GitHub API usage"), thread("Other")])).toEqual([
       "GitHub API usage",
@@ -186,10 +212,11 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
         ranges: [{ start: 1, end: 6 }],
       });
     }
+    // The app's own worktree prefix is not part of what the branch says.
     expect(scoreThreadSearch("cleanup", subject, NOW)?.hint).toEqual({
       label: "Branch",
-      text: "t3/cleanup-payloads",
-      ranges: [{ start: 3, end: 10 }],
+      text: "cleanup-payloads",
+      ranges: [{ start: 0, end: 7 }],
     });
     expect(scoreThreadSearch("trim", subject, NOW)?.hint).toBeUndefined();
     // Split across fields, the hint shows the first field with some of the words.
@@ -440,6 +467,12 @@ describe("rankSearchGroups with keywords and picks", () => {
     // A command named for the query stays first, unless the thread was picked for it.
     expect(rank(["Reload MCP servers"], named)).toEqual(["actions", "threads"]);
     expect(rank(["Reload MCP servers"], picked)).toEqual(["threads", "actions"]);
+    // A pick for a longer query keeps its row first among threads, but the
+    // groups hold still while the word is typed.
+    const pickedLonger = thread("Trim MCP model lists", {
+      opens: { openedAt: NOW, score: 1, picks: [{ query: "mcpx", at: NOW }] },
+    });
+    expect(rank(["Reload MCP servers"], pickedLonger)).toEqual(["actions", "threads"]);
     const oldPick = thread("Trim MCP model lists", {
       opens: { openedAt: NOW, score: 1, picks: [{ query: "mcp", at: NOW - 60 * DAY }] },
     });

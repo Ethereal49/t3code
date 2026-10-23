@@ -474,9 +474,12 @@ function rankPaletteItem(
 ): {
   readonly score: number;
   readonly quality: number;
+  readonly groupQuality?: number;
   readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
   readonly hint?: SearchMatchHint;
+  readonly pickedAt?: number;
+  readonly pickedExactly?: boolean;
 } | null {
   if (item.threadSearch) {
     const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);

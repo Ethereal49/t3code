@@ -10,6 +10,8 @@
 
 import type { OrchestrationV2ThreadOpens } from "@t3tools/contracts";
 
+import { WORKTREE_BRANCH_PREFIX } from "./git.ts";
+
 const ALPHANUMERIC = /[\p{L}\p{N}]/u;
 const LOWERCASE = /\p{Ll}/u;
 const UPPERCASE = /\p{Lu}/u;
@@ -198,6 +200,9 @@ const WHOLE_WORD = 1;
 const MID_WORD = 0.3;
 const TYPO = 0.45;
 const INITIALS = 0.2;
+// Whole words typed together are exact, so they rank with typos and above
+// mid-word hits, though below a match at a word start.
+const JOINED_WORDS = 0.6;
 
 interface TokenMatch extends SearchRange {
   readonly score: number;
@@ -230,20 +235,16 @@ function matchToken(
   ) {
     // A token that opens with punctuation (".ts") brings its own boundary, as in messages.
     if (field.wordStarts[index] || ownBoundary) {
-      // A punctuation-led token is whole when it covers the word after the
-      // punctuation: ".ts" is whole in "index.ts", a prefix in "parser.tsx".
-      let wordStart = index;
-      while (
-        ownBoundary &&
-        wordStart < field.text.length &&
-        !ALPHANUMERIC.test(field.text[wordStart]!)
-      ) {
-        wordStart++;
-      }
-      const wordLength =
-        (wordStart < field.text.length ? wordEnd(field, wordStart) : wordStart) - index;
-      const score =
-        token.length >= wordLength ? WHOLE_WORD : 0.7 + (0.2 * token.length) / wordLength;
+      // Whole when the match ends where a word ends: "t3c" is a prefix of
+      // "t3code", ".ts" whole in "index.ts" but a prefix in "parser.tsx".
+      const end = index + token.length;
+      const whole =
+        end >= field.text.length ||
+        field.wordStarts[end] === 1 ||
+        !ALPHANUMERIC.test(field.text[end]!);
+      let runEnd = end;
+      while (runEnd < field.text.length && ALPHANUMERIC.test(field.text[runEnd]!)) runEnd++;
+      const score = whole ? WHOLE_WORD : 0.7 + (0.2 * token.length) / (runEnd - index);
       if (best === null || score > best.score) {
         best = { score, start: index, end: index + token.length };
       }
@@ -270,12 +271,14 @@ function matchToken(
       // Short tokens only forgive a swapped pair: any other edit of a three- or
       // four-letter word matches too much ("cron" would find every "con…").
       const swapOnly = token.length <= 4;
+      // The same length first, so "githbu" highlights all of "GitHub".
       const lengths = swapOnly
         ? [token.length]
-        : [token.length - 1, token.length, token.length + 1];
-      // People rarely mistype the first letter, so a typo keeps it, unless it swaps the first two.
+        : [token.length, token.length - 1, token.length + 1];
+      // People rarely mistype the first letter, so a typo keeps it, unless it
+      // swaps the first two of a longer word ("ing" is not "nig…").
       const firstLetterKept =
-        word[0] === token[0] || (word[0] === token[1] && word[1] === token[0]);
+        word[0] === token[0] || (token.length > 3 && word[0] === token[1] && word[1] === token[0]);
       if (!firstLetterKept) continue;
       for (const length of lengths) {
         if (length > word.length) continue;
@@ -317,7 +320,7 @@ function matchJoinedWords(field: SearchField, token: string): TokenMatch | null 
       }
     }
     if (rest.length === 0 && letters.length > 1) {
-      return { score: INITIALS, start, end: letters.at(-1)!.end, letters };
+      return { score: JOINED_WORDS, start, end: letters.at(-1)!.end, letters };
     }
   }
   return null;
@@ -359,7 +362,7 @@ function matchInitials(field: SearchField, token: string): TokenMatch | null {
     }
     return letters;
   };
-  // "fis" in "Feature: Fix sidebar" starts at the second F.
+  // "fixsid" in "Feature: Fix sidebar" starts at the second F.
   for (
     let start = nextWordStart(0, token[0]!);
     start !== -1;
@@ -381,6 +384,12 @@ interface WeightedSearchField {
    * matched loosely would list results the user cannot see why for.
    */
   readonly keyword?: boolean;
+  /**
+   * Where the thread lives (project, environment): it helps a match, but a
+   * word start there does not make the match strong, so it never turns off
+   * joined words or typos for the titles.
+   */
+  readonly context?: boolean;
 }
 
 interface SearchFieldsMatch {
@@ -428,6 +437,7 @@ function matchSearchFields(
       weight: field.weight,
       wholeWords: field.wholeWords ?? false,
       keyword: field.keyword ?? false,
+      context: field.context ?? false,
     }));
   const primary = fields[0]?.value ? prepared[0]?.field : undefined;
   // An empty token would match everywhere, and loop forever in `matchToken`.
@@ -440,14 +450,14 @@ function matchSearchFields(
     let best = 0;
     let bestPrimary: TokenMatch | null = null;
     let atWordStart = false;
-    for (const { field, weight, wholeWords, keyword } of prepared) {
+    for (const { field, weight, wholeWords, keyword, context } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
       const typos = (options?.typos ?? false) && !keyword;
       // Joined words and initials only count in the name.
       const match = matchToken(field, token, typos, field === primary);
       if (match === null || match.score < (wholeWords ? WHOLE_WORD : keyword ? 0.7 : 0)) continue;
       if (field === primary) bestPrimary = match;
-      if (match.score >= 0.7) atWordStart = true;
+      if (match.score >= 0.7 && !context) atWordStart = true;
       if (match.score * weight > best) best = match.score * weight;
     }
     if (best === 0) return null;
@@ -867,9 +877,10 @@ function matchReference(
 }
 
 // How long a pick lasts. While it does, typing the query again (or the start of
-// it) puts the thread first, the latest pick first, and lifts its group above
-// commands that match as well. It runs from the pick, so an old pick lets go
-// even if the thread is opened in other ways.
+// it) puts the thread first in its group, the latest pick first. The exact
+// query also lifts its group above commands that match as well; a prefix does
+// not, so the groups hold still while a word is typed. It runs from the pick,
+// so an old pick lets go even if the thread is opened in other ways.
 const PICK_WINDOW_MS = 21 * DAY_MS;
 // A remembered pick alone lists its thread (one picked through a message
 // match, say), but two letters are too little to go on.
@@ -881,14 +892,15 @@ function activePick(
   normalizedQuery: string,
   now: number,
 ): ThreadOpenStats["picks"][number] | undefined {
+  // Stored picks are cut to a length, so compare the query cut the same way.
+  const query = pickedQuery(normalizedQuery);
   // The start of a picked query counts from three letters: "n" is too little
   // to go on, and would flip the group order between keystrokes.
-  const prefix = normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
+  const prefix = query.length >= PICK_ONLY_MIN_LENGTH;
   let latest: ThreadOpenStats["picks"][number] | undefined;
   for (const pick of thread.opens?.picks ?? []) {
     if (now - pick.at > PICK_WINDOW_MS) continue;
-    const matches =
-      pick.query === normalizedQuery || (prefix && pick.query.startsWith(normalizedQuery));
+    const matches = pick.query === query || (prefix && pick.query.startsWith(query));
     if (matches && (latest === undefined || pick.at > latest.at)) latest = pick;
   }
   return latest;
@@ -906,12 +918,22 @@ export interface ThreadSearchMatch {
   readonly hint?: SearchMatchHint;
   /** When the thread was picked for this query, while that pick lasts; see `rankSearchGroups`. */
   readonly pickedAt?: number;
+  /** Picked for exactly this query, which also lifts its group; see `rankSearchGroups`. */
+  readonly pickedExactly?: boolean;
 }
 
 export interface SearchMatchHint {
   readonly label: string;
   readonly text: string;
   readonly ranges: ReadonlyArray<SearchRange>;
+}
+
+// Most threads' branches start with the app's own worktree prefix ("t3/", and
+// "t3code/" before it), so "t3 connect" would match nearly every thread.
+const WORKTREE_BRANCH_PREFIX_PATTERN = new RegExp(`^(?:${WORKTREE_BRANCH_PREFIX}|t3code)/`);
+
+function searchableBranch(branch: string | null | undefined): string | null {
+  return branch ? branch.replace(WORKTREE_BRANCH_PREFIX_PATTERN, "") : null;
 }
 
 const PULL_REQUEST_WORDS = new Set(["pr", "prs", "pull", "pulls", "request", "requests"]);
@@ -943,7 +965,7 @@ function matchHint(
       label: "PR",
       text: `#${pullRequest.number}${pullRequest.title ? ` ${pullRequest.title}` : ""}`,
     })),
-    { label: "Branch", text: thread.branch },
+    { label: "Branch", text: searchableBranch(thread.branch) },
     { label: "Project", text: thread.projectTitle },
     { label: "Environment", text: thread.environmentLabel },
   ];
@@ -1009,9 +1031,14 @@ export function scoreThreadSearch(
     fields.push({ value: `#${pullRequest.number}`, weight: 1 });
     if (pullRequest.title) fields.push({ value: pullRequest.title, weight: 0.5 });
   }
-  if (thread.branch) fields.push({ value: thread.branch, weight: 0.6 });
-  if (thread.projectTitle) fields.push({ value: thread.projectTitle, weight: 0.45 });
-  if (thread.environmentLabel) fields.push({ value: thread.environmentLabel, weight: 0.45 });
+  const branch = searchableBranch(thread.branch);
+  if (branch) fields.push({ value: branch, weight: 0.6 });
+  if (thread.projectTitle) {
+    fields.push({ value: thread.projectTitle, weight: 0.25, context: true });
+  }
+  if (thread.environmentLabel) {
+    fields.push({ value: thread.environmentLabel, weight: 0.25, context: true });
+  }
   const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
   const pickedAt = pick?.at;
   const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#\s*/, "");
@@ -1042,6 +1069,7 @@ export function scoreThreadSearch(
     titleRanges: match.primaryRanges,
     ...(hint ? { hint } : {}),
     ...(pickedAt === undefined ? {} : { pickedAt }),
+    ...(pick?.query === pickedQuery(normalizedQuery) ? { pickedExactly: true } : {}),
   };
 }
 
@@ -1109,10 +1137,10 @@ export interface RankedSearchItem<T, M> {
 
 /**
  * Ranks grouped items: within a group, results picked for the query first
- * (latest pick first), then best score. Groups with no match are dropped. The
+ * (latest pick first), then by match class, then best score. Groups with no match are dropped. The
  * rest order by the class of their best match (word starts in a name, typos in
- * a name or keyword matches, or weaker), one class higher for a picked
- * result, and ties keep the given order. Classes
+ * a name or keyword matches, or weaker), one class higher for a result picked
+ * for exactly this query, and ties keep the given order. Classes
  * rather than scores keep the group order steady while a word is typed, and
  * keep use, which only counts for threads, from outweighing a command that
  * matches as well.
@@ -1130,6 +1158,8 @@ export function rankSearchGroups<
     readonly quality: number;
     readonly strong: boolean;
     readonly pickedAt?: number;
+    readonly pickedExactly?: boolean;
+    readonly groupQuality?: number;
   },
 >(
   groups: ReadonlyArray<{ readonly group: G; readonly items: ReadonlyArray<T> }>,
@@ -1150,14 +1180,18 @@ export function rankSearchGroups<
   return ranked
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];
+      // Use decides within a match class, never across one: a busy thread
+      // matched through its project does not pass a title that holds the words.
       const sorted = [...items].sort(
         (left, right) =>
           (right.match.pickedAt ?? 0) - (left.match.pickedAt ?? 0) ||
+          matchClass(right.match.quality) - matchClass(left.match.quality) ||
           right.match.score - left.match.score,
       );
       const best = Math.max(
         ...items.map(
-          ({ match }) => matchClass(match.quality) + (match.pickedAt === undefined ? 0 : 1),
+          ({ match }) =>
+            matchClass(match.groupQuality ?? match.quality) + (match.pickedExactly ? 1 : 0),
         ),
       );
       return [{ group, ranked: sorted, best, order }];
@@ -1180,6 +1214,8 @@ export function rankSearchItems<
 export interface SearchTermsMatch {
   readonly score: number;
   readonly quality: number;
+  /** The quality its group ranks by, when lower; see `scoreSearchTerms`. */
+  readonly groupQuality?: number;
   readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
 }
@@ -1215,10 +1251,13 @@ export function scoreSearchTerms(
   return (
     match && {
       score: match.quality,
+      quality: match.quality,
       // Below the word-start class: a match only in hidden keywords must not put
-      // its group above a result whose name matches.
-      quality:
-        match.primaryRanges.length > 0 ? match.quality : Math.min(match.quality, KEYWORD_QUALITY),
+      // its group above a result whose name matches. Inside the group an exact
+      // alias still beats a name prefix ("pr" lists "Open pull requests" first).
+      ...(match.primaryRanges.length > 0
+        ? {}
+        : { groupQuality: Math.min(match.quality, KEYWORD_QUALITY) }),
       strong: match.strong,
       ranges: match.primaryRanges,
     }
