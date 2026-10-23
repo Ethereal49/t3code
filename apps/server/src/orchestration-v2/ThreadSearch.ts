@@ -70,7 +70,7 @@ const SearchRow = Schema.Struct({
 });
 
 const SNIPPET_LENGTH = 240;
-const MESSAGE_HIT_LIMIT = 5000;
+const MESSAGE_HIT_LIMIT = 2000;
 
 // Latin letters with their accented forms. SQLite's GLOB is case-sensitive
 // and knows no accents, so each letter becomes a class of every form.
