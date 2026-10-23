@@ -87,7 +87,7 @@ describe("symbolicateStack", () => {
   it("rewrites bundle frames to original locations and keeps everything else", () => {
     const map = decodeSourceMap(HERMES_MAP)!;
     const result = symbolicateStack(
-      `${HERMES_STACK}\n    at apply (native)\n    at loop (InternalBytecode.js:1:1)`,
+      `${HERMES_STACK}\n    at apply (native)\n    at tryCallOne (address at InternalBytecode.js:1:89)`,
       map,
     );
     expect(result).toEqual({
@@ -98,7 +98,7 @@ describe("symbolicateStack", () => {
         "    at gamma (t.js:8:13)",
         "    at global (t.js:10:6)",
         "    at apply (native)",
-        "    at loop (InternalBytecode.js:1:1)",
+        "    at tryCallOne (address at InternalBytecode.js:1:89)",
       ].join("\n"),
       bundleFrames: 4,
       mappedFrames: 4,

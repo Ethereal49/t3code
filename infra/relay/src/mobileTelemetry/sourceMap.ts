@@ -199,10 +199,11 @@ export function originalPositionFor(
  * A Hermes frame in the app bundle, such as
  * `at render (address at index.android.bundle:1:48213)`. Hermes prints the
  * bytecode offset as the column, which is exactly the generated column in the
- * composed Hermes source map. Frames without `address at` (native code,
- * `InternalBytecode.js`) are not in the bundle and are left alone.
+ * composed Hermes source map. Native frames have no `address at`, and Hermes
+ * prints its own runtime as `address at InternalBytecode.js:...`, whose
+ * offsets are not in the app's map; both are left alone.
  */
-const BUNDLE_FRAME = /address at ([^\s()]+):(\d+):(\d+)/u;
+const BUNDLE_FRAME = /address at (?!InternalBytecode\.js:)([^\s()]+):(\d+):(\d+)/u;
 
 export interface SymbolicatedStack {
   readonly stack: string;
