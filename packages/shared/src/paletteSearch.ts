@@ -2,8 +2,8 @@
  * Word-aware fuzzy ranking for the command palettes (web, desktop, mobile) and
  * the MCP thread search, so every surface puts the same thread first.
  *
- * A match scores by quality: a whole word beats a word prefix, which beats a
- * one-typo prefix, which beats a mid-word substring, which beats initials.
+ * A match scores by quality: a whole word beats a word prefix, which beats
+ * words typed together, a one-typo prefix, and then a mid-word substring.
  * Word starts include camelCase, kebab, path, and letter/digit boundaries.
  * Thread scores then multiply quality by how recently and often the thread
  * was used, within limits.
@@ -137,7 +137,7 @@ const WRAPPING_QUOTES = /^\s*["'`“”‘’]+|["'`“”‘’]+\s*$/g;
 
 /** Folded, whitespace-collapsed query; empty when there is nothing to match. */
 export function foldSearchQuery(query: string): string {
-  return foldInPlace(query.replace(WRAPPING_QUOTES, ""))
+  return foldInPlace(query.replace(WRAPPING_QUOTES, "").normalize("NFC"))
     .split(/\s+/)
     .filter((token) => token.length > 0)
     .join(" ");
@@ -175,16 +175,17 @@ function withinOneEdit(left: string, right: string, swapOnly: boolean): boolean 
 }
 
 const WHOLE_WORD = 1;
+// The bonus for a field equal to the whole query lifts a whole word to this.
+const WHOLE_NAME = 1.5;
 const MID_WORD = 0.3;
 const TYPO = 0.45;
-const INITIALS = 0.2;
 // Whole words typed together are exact, so they rank with typos and above
 // mid-word hits, though below a match at a word start.
 const JOINED_WORDS = 0.6;
 
 interface TokenMatch extends SearchRange {
   readonly score: number;
-  /** Separate ranges, for letters spread out across the field. */
+  /** Separate ranges, for words typed together. */
   readonly letters?: ReadonlyArray<SearchRange>;
 }
 
@@ -195,8 +196,8 @@ interface TokenMatch extends SearchRange {
  * `typos`, a three-character token may swap a pair and a longer one may carry
  * one typo in a word prefix that keeps its first letter. Numbers never match
  * with a typo: 22889 is not pull request 22189. In the primary field (the
- * name), the token may also be whole words typed together (see `matchJoinedWords`), and with typos also
- * initials or word-start runs (see `matchInitials`).
+ * name), the token may also be whole words typed together (see
+ * `matchJoinedWords`).
  */
 function matchToken(
   field: SearchField,
@@ -240,10 +241,17 @@ function matchToken(
     if (joined) return joined;
   }
   if ((best !== null && best.score > MID_WORD) || !typos || token.length < 3) return best;
-  // Numbers skip typos (22889 is not 22189) but keep initials: "pnpm12" is "pnpm 12".
+  // Numbers skip typos: 22889 is not 22189.
   if (!DIGIT.test(token)) {
     for (let index = 0; index < field.text.length; index++) {
       if (!field.wordStarts[index]) continue;
+      // People rarely mistype the first letter, so a typo keeps it, unless it
+      // swaps the first two of a longer word ("ing" is not "nig…").
+      const first = field.text[index];
+      const firstLetterKept =
+        first === token[0] ||
+        (token.length > 3 && first === token[1] && field.text[index + 1] === token[0]);
+      if (!firstLetterKept) continue;
       // The whole run, across camelCase joins: "githbu" is "GitHub".
       let runEnd = index + 1;
       while (runEnd < field.text.length && ALPHANUMERIC.test(field.text[runEnd]!)) runEnd++;
@@ -255,11 +263,6 @@ function matchToken(
       const lengths = swapOnly
         ? [token.length]
         : [token.length, token.length - 1, token.length + 1];
-      // People rarely mistype the first letter, so a typo keeps it, unless it
-      // swaps the first two of a longer word ("ing" is not "nig…").
-      const firstLetterKept =
-        word[0] === token[0] || (token.length > 3 && word[0] === token[1] && word[1] === token[0]);
-      if (!firstLetterKept) continue;
       for (const length of lengths) {
         if (length > word.length) continue;
         const prefix = word.slice(0, length);
@@ -269,80 +272,49 @@ function matchToken(
       }
     }
   }
-  return best ?? (typos && isPrimary ? matchInitials(field, token) : null);
+  return best;
 }
 
 /**
- * `token` typed as the starts of consecutive words, from a word start: "fsl"
- * is "Fix sidebar lag", "vscode" is "VS Code". `fits(length, whole)` says
- * which runs may come before the last, which may be any prefix; `accepts`
- * vets a full match. Longer runs are tried first.
+ * Whole words typed together: "vscode" is "VS Code", "fixsid" is "Fix
+ * sid(ebar)". Every part is a whole word but the last. Short words before a
+ * short prefix are a coincidence inside a title ("inth" is not "in th(read)"),
+ * but not at its start ("t3co" is "T3 Co(de)"), before three letters
+ * ("gomod"), or a whole word ("vscode").
  */
-function matchWordRuns(
-  field: SearchField,
-  token: string,
-  fits: (length: number, whole: boolean) => boolean,
-  accepts: (runs: ReadonlyArray<SearchRange>, whole: boolean) => boolean,
-): TokenMatch | null {
-  const runsFrom = (at: number, rest: string): SearchRange[] | null => {
-    const end = wordEnd(field, at);
-    for (let length = Math.min(rest.length, end - at); length > 0; length--) {
-      if (!field.text.startsWith(rest.slice(0, length), at)) continue;
-      if (length === rest.length) return [{ start: at, end: at + length }];
-      if (!fits(length, at + length === end)) continue;
-      let next = end;
-      while (next < field.text.length && !field.wordStarts[next]) next++;
-      const after = next < field.text.length ? runsFrom(next, rest.slice(length)) : null;
-      if (after) return [{ start: at, end: at + length }, ...after];
-    }
-    return null;
-  };
+function matchJoinedWords(field: SearchField, token: string): TokenMatch | null {
+  const firstWord = field.wordStarts.indexOf(1);
   for (let start = 0; start < field.text.length; start++) {
     if (!field.wordStarts[start] || field.text[start] !== token[0]) continue;
-    const runs = runsFrom(start, token);
-    const last = runs?.at(-1);
-    if (runs && last && runs.length > 1 && accepts(runs, last.end === wordEnd(field, last.start))) {
-      return { score: 0, start, end: last.end, letters: runs };
+    const runs: SearchRange[] = [];
+    let at = start;
+    let rest = token;
+    while (rest.length > 0 && at < field.text.length) {
+      const end = wordEnd(field, at);
+      if (rest.length <= end - at && field.text.startsWith(rest, at)) {
+        runs.push({ start: at, end: at + rest.length });
+        rest = "";
+      } else if (rest.startsWith(field.text.slice(at, end))) {
+        runs.push({ start: at, end });
+        rest = rest.slice(end - at);
+        at = end;
+        while (at < field.text.length && !field.wordStarts[at]) at++;
+      } else {
+        break;
+      }
+    }
+    const last = runs.at(-1);
+    if (rest.length > 0 || last === undefined || runs.length < 2) continue;
+    if (
+      last.end === wordEnd(field, last.start) ||
+      last.end - last.start >= 3 ||
+      start === firstWord ||
+      runs.slice(0, -1).every((run) => run.end - run.start >= 3)
+    ) {
+      return { score: JOINED_WORDS, start, end: last.end, letters: runs };
     }
   }
   return null;
-}
-
-/**
- * Whole words typed together: "vscode" is "VS Code", "fixuibug" is "Fix UI
- * bug". Every part is a whole word but the last. Short words before a short
- * prefix are a coincidence inside a title ("inth" is not "in th(read)"), but
- * not at its start ("t3co" is "T3 Co(de)"), before three letters ("gomod"),
- * or a whole word ("vscode").
- */
-function matchJoinedWords(field: SearchField, token: string): TokenMatch | null {
-  const match = matchWordRuns(
-    field,
-    token,
-    (_length, whole) => whole,
-    (runs, lastWhole) =>
-      lastWhole ||
-      runs.at(-1)!.end - runs.at(-1)!.start >= 3 ||
-      runs[0]!.start === field.wordStarts.indexOf(1) ||
-      runs.slice(0, -1).every((run) => run.end - run.start >= 3),
-  );
-  return match && { ...match, score: JOINED_WORDS };
-}
-
-/**
- * Initials and word-start runs: "fsl" and "fixsid" find "Fix sidebar lag", as
- * in VS Code. Every run but the last is one letter or a whole word of three or
- * more ("lint" is not "Lin(k) t(hread)"). Weakest match, tried last.
- */
-function matchInitials(field: SearchField, token: string): TokenMatch | null {
-  if (token.length < 3 || /^\p{N}+$/u.test(token)) return null;
-  const match = matchWordRuns(
-    field,
-    token,
-    (length, whole) => length === 1 || (whole && length >= 3),
-    () => true,
-  );
-  return match && { ...match, score: INITIALS };
 }
 
 interface WeightedSearchField {
@@ -370,7 +342,7 @@ interface WeightedSearchField {
 }
 
 interface SearchFieldsMatch {
-  /** Roughly 0.2 (initials) to 1.5 (exact title). */
+  /** Roughly 0.3 (inside a word) to 1.5 (exact title). */
   readonly quality: number;
   /** Every token matched at a word start, without a typo. */
   readonly strong: boolean;
@@ -427,7 +399,7 @@ function matchSearchFields(
     for (const { field, weight, wholeWords, keyword, context, allowMidWord } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
       const typos = (options?.typos ?? false) && !keyword;
-      // Joined words and initials only count in the name.
+      // Joined words only count in the name.
       const match = matchToken(field, token, typos, field === primary, allowMidWord);
       if (match === null || match.score < (wholeWords ? WHOLE_WORD : keyword ? 0.7 : 0)) continue;
       if (field === primary) bestPrimary = match;
@@ -441,7 +413,7 @@ function matchSearchFields(
   }
   let quality = total / tokens.length;
   if (primary) {
-    if (primary.text === normalizedQuery) quality += 0.5;
+    if (primary.text === normalizedQuery) quality += WHOLE_NAME - WHOLE_WORD;
     else if (tokens.length > 1 && primary.text.includes(normalizedQuery)) quality += 0.25;
   }
   return {
@@ -503,6 +475,19 @@ function endsWordAt(text: string, end: number): boolean {
   return end >= text.length || !ALPHANUMERIC.test(text[end]!) || startsWordAt(text, end);
 }
 
+// A commit SHA or UUID part: seven or more hex characters with a digit.
+const HEX_ID = /^(?=[a-f]*\d)[0-9a-f]{7,}$/i;
+
+// Whether `index` sits inside a hex ID longer than `length` characters: its
+// letters after digits are not words ("cafe" in "7cafe52bb8").
+function insideHexId(text: string, index: number, length: number): boolean {
+  let start = index;
+  while (start > 0 && ALPHANUMERIC.test(text[start - 1]!)) start--;
+  let end = index + length;
+  while (end < text.length && ALPHANUMERIC.test(text[end]!)) end++;
+  return end - start > length && HEX_ID.test(text.slice(start, end));
+}
+
 // Where `token` best sits in `folded`, a fold of `text`: a whole word, else a
 // word start, else inside a word.
 function findMessageToken(
@@ -512,7 +497,7 @@ function findMessageToken(
 ): { readonly at: number; readonly quality: number } | null {
   let best: { readonly at: number; readonly quality: number } | null = null;
   for (let index = folded.indexOf(token); index !== -1; index = folded.indexOf(token, index + 1)) {
-    if (!startsWordAt(text, index)) {
+    if (!startsWordAt(text, index) || insideHexId(text, index, token.length)) {
       best ??= { at: index, quality: MID_WORD };
     } else if (endsWordAt(text, index + token.length)) {
       return { at: index, quality: 1 };
@@ -732,12 +717,16 @@ function matchReference(
     ...(thread.pullRequests ?? []).flatMap((pullRequest) => pullRequest.references ?? []),
   ];
   const anywhere = DIGIT.test(normalizedQuery);
+  // A number is never cut short: ".../pull/2288" is not pull request 22889.
+  const notCut = (text: string, end: number) => !DIGIT.test(text[end] ?? "");
   return references.some((reference) => {
     const folded = reference.toLowerCase();
+    const at = folded.indexOf(normalizedQuery);
     // A pasted link may go on past the reference: ".../pull/22889/files".
     return anywhere
-      ? folded.includes(normalizedQuery) || normalizedQuery.startsWith(folded)
-      : folded.startsWith(normalizedQuery);
+      ? (at !== -1 && notCut(folded, at + normalizedQuery.length)) ||
+          (normalizedQuery.startsWith(folded) && notCut(normalizedQuery, folded.length))
+      : at === 0;
   })
     ? { quality: 0.6, strong: true, primaryRanges: [] }
     : null;
@@ -791,6 +780,8 @@ export interface ThreadSearchMatch {
   readonly pickedAt?: number;
   /** Picked for exactly this query, which also lifts its group; see `rankSearchGroups`. */
   readonly pickedExactly?: boolean;
+  /** Below the whole-name class; see `scoreThreadSearch`. */
+  readonly groupQuality: number;
 }
 
 export interface SearchMatchHint {
@@ -885,6 +876,9 @@ export function scoreThreadSearch(
   return {
     score: match.quality * threadUsageBoost(thread, now),
     quality: match.quality,
+    // A thread's whole title never lifts its group over a command or project
+    // of that name: every new thread is titled "New thread" for a while.
+    groupQuality: Math.min(match.quality, WHOLE_NAME - 0.01),
     strong: match.strong,
     titleRanges: match.primaryRanges,
     ...(explain ? { explain } : {}),
@@ -965,7 +959,7 @@ export const PALETTE_SECONDARY_LIMIT = 3;
 // project named "lakebed" leads for "lakebed", and "keybindngs" is the setting
 // of that name, not a command that lists it as a keyword.
 function matchClass(quality: number): number {
-  return quality >= 1.5 ? 3 : quality >= 0.7 ? 2 : quality >= 0.4 ? 1 : 0;
+  return quality >= WHOLE_NAME ? 3 : quality >= 0.7 ? 2 : quality >= 0.4 ? 1 : 0;
 }
 
 export interface RankedSearchItem<T, M> {
@@ -1020,8 +1014,12 @@ export function rankSearchGroups<
       if (items.length === 0) return [];
       // Use decides within a match class, never across one: a busy thread
       // matched through its project does not pass a title that holds the words.
+      // Picks reorder word matches but never lift a match inside a word or a
+      // typo above one.
+      const wordMatch = (match: M) => Math.min(matchClass(match.quality), 2);
       const sorted = [...items].sort(
         (left, right) =>
+          wordMatch(right.match) - wordMatch(left.match) ||
           Number(right.match.pickedExactly ?? false) - Number(left.match.pickedExactly ?? false) ||
           (right.match.pickedAt ?? 0) - (left.match.pickedAt ?? 0) ||
           matchClass(right.match.quality) - matchClass(left.match.quality) ||

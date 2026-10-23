@@ -301,6 +301,45 @@ describe("buildThreadActionItems", () => {
     expect(labels("pnpm up")).toEqual(["Threads"]);
   });
 
+  it("runs the command for its whole name over a thread with that title, and lists the open thread last", () => {
+    const threads = [
+      makeThread({ id: ThreadId.make("thread-new"), title: "New thread" }),
+      makeThread({ id: ThreadId.make("thread-open"), title: "New thread layout" }),
+      makeThread({ id: ThreadId.make("thread-other"), title: "New thread button" }),
+    ];
+    const threadSearchItems = buildThreadActionItems({
+      threads,
+      activeThread: threads[1]!,
+      projectByKey: new Map(),
+      icon: null,
+      runThread: async () => undefined,
+    });
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [
+        {
+          value: "actions",
+          label: "Actions",
+          items: [
+            {
+              kind: "action",
+              value: "action:new-thread",
+              searchTerms: ["New thread in t3code"],
+              title: "New thread in t3code",
+              icon: null,
+              run: async () => undefined,
+            },
+          ],
+        },
+      ],
+      query: "new thread",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems,
+    });
+    expect(groups.map((group) => group.label)).toEqual(["Actions", "Threads"]);
+    expect(groups[1]?.items.at(-1)?.title).toBe("New thread layout");
+  });
+
   it("lists a project above threads that only hold its name when the name is typed", () => {
     const threadSearchItems = buildThreadActionItems({
       threads: [makeThread({ title: "Lakebed performance gains" })],

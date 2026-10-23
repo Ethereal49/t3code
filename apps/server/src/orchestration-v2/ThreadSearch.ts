@@ -3,6 +3,7 @@ import {
   MessageId,
   OrchestrationThreadSearchSource,
   OrchestrationV2AppThreadJson,
+  OrchestrationV2ThreadOpens,
   type OrchestrationSearchThreadsInput,
   type OrchestrationSearchThreadsResult,
   ProjectId,
@@ -12,6 +13,7 @@ import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
@@ -58,6 +60,11 @@ const SearchRow = Schema.Struct({
   text: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
 });
+
+const ThreadOpensRow = Schema.Struct({ threadId: ThreadId, opens: Schema.NullOr(Schema.String) });
+const decodeThreadOpens = Schema.decodeUnknownOption(
+  Schema.fromJsonString(OrchestrationV2ThreadOpens),
+);
 
 const SNIPPET_LENGTH = 240;
 // The newest hits read per query. A common word stops here instead of reading
@@ -111,7 +118,12 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
   if (isLowSurrogate(text.charCodeAt(start))) start++;
   // Collapsing whitespace shortens the text, so read more of it.
   const rawEnd = Math.min(text.length, start + SNIPPET_LENGTH * 2);
-  const shown = text.slice(start, rawEnd).replace(/\s+/g, " ").trim();
+  // Emphasis and code marks do not show in a thread either.
+  const shown = text
+    .slice(start, rawEnd)
+    .replace(/\*\*|__|`+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   let end = Math.min(shown.length, SNIPPET_LENGTH - 2);
   if (isLowSurrogate(shown.charCodeAt(end))) end--;
   const cut = end < shown.length || rawEnd < text.length;
@@ -238,6 +250,16 @@ export const make = Effect.gen(function* () {
     execute: (request) => messageHitsQuery(sql, request),
   });
 
+  const threadOpens = SqlSchema.findAll({
+    Request: Schema.Struct({ threadIds: TokenList }),
+    Result: ThreadOpensRow,
+    execute: ({ threadIds }) => sql`
+      SELECT thread_id AS "threadId", json_extract(payload_json, '$.opens') AS opens
+      FROM orchestration_v2_projection_threads
+      WHERE thread_id IN (SELECT value FROM json_each(${threadIds}))
+    `,
+  });
+
   const titleCandidates = SqlSchema.findAll({
     Request: Schema.Struct({ projectId: Schema.NullOr(ProjectId) }),
     Result: TitleCandidateRow,
@@ -285,9 +307,8 @@ export const make = Effect.gen(function* () {
   ) {
     // One message per thread: the best word match, then what the user wrote,
     // since that is what they remember asking, then the newest by when it was
-    // written. Threads order by that match, then its age. Row order is not
-    // age: imported histories arrive in one batch. Text relevance (bm25)
-    // would cost a pass over every hit in history.
+    // written. Row order is not age: imported histories arrive in one batch.
+    // Text relevance (bm25) would cost a pass over every hit in history.
     type Hit = {
       readonly row: typeof SearchRow.Type;
       /** The message as it reads, links as their text. */
@@ -331,14 +352,23 @@ export const make = Effect.gen(function* () {
       }
       if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
     }
-    // Clients rank these again with use and picks (`rankMessageMatches`), so
-    // this order only picks which threads come back: match quality, then how
-    // much the thread uses the word, then the newest.
-    const ranked = [...best.values()].sort(
-      (left, right) =>
-        right.quality - left.quality ||
-        hitCount(right.row.threadId) - hitCount(left.row.threadId) ||
-        newer(left, right),
+    // Ranked as clients rank them, with picks and use, before the limit cuts:
+    // a thread picked for this query must come back even when it only
+    // matches in a few old messages.
+    const opens = best.size === 0 ? [] : yield* read(threadOpens({ threadIds: [...best.keys()] }));
+    const opensById = new Map(
+      opens.map((row) => [row.threadId, Option.getOrNull(decodeThreadOpens(row.opens))]),
+    );
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const ranked = rankMessageMatches(
+      [...best.values()].map((hit) => ({
+        ...hit,
+        hits: hitCount(hit.row.threadId),
+        messageCreatedAt: hit.row.messageCreatedAt,
+      })),
+      (hit) => ({ title: "", activityAt: null, opens: opensById.get(hit.row.threadId) ?? null }),
+      foldSearchQuery(input.query),
+      now,
     );
     return {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, text, quality, offset }) => ({

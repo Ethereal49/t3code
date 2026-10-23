@@ -88,6 +88,15 @@ describe("scoreThreadSearch", () => {
       thread("Relay pairing", { activityAt: NOW }),
     ];
     expect(rankTitles("rel", threads)).toEqual(["Release checklist", "Relay pairing"]);
+    // A pick never lifts a match inside a word above a word match.
+    expect(
+      rankTitles("auth", [
+        thread("Fix oauth redirect", {
+          opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "auth", at: NOW - DAY }] },
+        }),
+        thread("Share auth across worktrees"),
+      ]),
+    ).toEqual(["Share auth across worktrees", "Fix oauth redirect"]);
     // Two letters are too little to go on.
     expect(rankTitles("re", threads)).toEqual(["Relay pairing", "Release checklist"]);
     // Once the query leaves the pick behind, the better match wins again.
@@ -271,6 +280,8 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("tos", [thread("Move Client State to Server")])).toEqual([]);
     expect(rankTitles("t3co", [thread("T3 Code vs Gemini")])).toEqual(["T3 Code vs Gemini"]);
     expect(rankTitles('"sidebar lag"', [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
+    // A pasted query with a separate accent mark matches the composed title.
+    expect(rankTitles("cafe\u0301", [thread("Café menu")])).toEqual(["Café menu"]);
     // Three letters of the last word are enough, as it is typed.
     expect(rankTitles("gomod", [thread("Migrate to Go modules")])).toEqual([
       "Migrate to Go modules",
@@ -318,21 +329,19 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     ).toEqual(["Share auth across worktrees", "Fix oauth redirect"]);
   });
 
-  it("matches initials and word-start runs as a last resort, highlighting each letter", () => {
+  it("reads a word and the start of the next typed together, highlighting each part", () => {
     const threads = [thread("Fix sidebar lag"), thread("Unrelated work")];
-    expect(rankTitles("fsl", threads)).toEqual(["Fix sidebar lag"]);
-    // Initials take consecutive words.
-    expect(rankTitles("wip", [thread("Fix Wrong Icon for Cloned Projects")])).toEqual([]);
     expect(rankTitles("fixsid", threads)).toEqual(["Fix sidebar lag"]);
     // A later "F" can start the run.
     expect(rankTitles("fixsid", [thread("Feature: Fix sidebar lag")])).toEqual([
       "Feature: Fix sidebar lag",
     ]);
-    expect(scoreThreadSearch("fsl", threads[0]!, NOW, { typos: true })?.titleRanges).toEqual([
-      { start: 0, end: 1 },
-      { start: 4, end: 5 },
-      { start: 12, end: 13 },
+    expect(scoreThreadSearch("fixsid", threads[0]!, NOW)?.titleRanges).toEqual([
+      { start: 0, end: 3 },
+      { start: 4, end: 7 },
     ]);
+    // Initials are not words typed together.
+    expect(rankTitles("fsl", threads)).toEqual([]);
   });
 
   it("finds nothing rather than an unrelated thread when no word matches", () => {
@@ -372,6 +381,10 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
       expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW), query).not.toBeNull();
     }
     expect(scoreThreadSearch("github.com", subject, NOW)).toBeNull();
+    // A number is never cut short.
+    for (const query of ["github.com/pingdotgg/t3code/pull/2288", "t3code#2288"]) {
+      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW), query).toBeNull();
+    }
   });
 });
 
@@ -600,6 +613,12 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
     expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
     expect(scoreMessageMatch("Use the sidebar", '"sidebar"')).toEqual({ quality: 1, offset: 8 });
+    // A commit SHA is one word: "cafe" inside one only matches inside a word.
+    expect(scoreMessageMatch("see commit 7cafe52bb8", "cafe")).toEqual({
+      quality: 0.3,
+      offset: 12,
+    });
+    expect(scoreMessageMatch("7cafe52bb8, then the cafe", "cafe")?.quality).toBe(1);
     // A whole word beats a word prefix: "mode" prefers "mode" over "model".
     expect(scoreMessageMatch("model settings", "mode")?.quality).toBe(0.8);
     expect(scoreMessageMatch("The model and the mode switch", "mode")).toEqual({

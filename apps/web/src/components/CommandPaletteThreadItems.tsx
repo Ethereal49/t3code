@@ -7,6 +7,7 @@ import {
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
+  findSearchTokenRanges,
   foldSearchQuery,
   messageSearchTokens,
   pickedQuery,
@@ -145,11 +146,14 @@ export function useCommandPaletteThreadItems(input: {
     },
     runThread: async (thread) => {
       // A pick sends its open with the query, always, so the server records
-      // it; the thread view then skips its own open.
+      // it; the thread view then skips its own open. The open thread is no pick.
+      const isOpen =
+        activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
       if (
         threadSearchQuery.trim().length > 0 &&
         !threadSearchQuery.startsWith(">") &&
-        thread.lastVisitedAt !== undefined
+        thread.lastVisitedAt !== undefined &&
+        !isOpen
       ) {
         claimThreadOpen(thread.environmentId, thread.id, Date.now());
         void visitThread({
@@ -197,15 +201,18 @@ export function useCommandPaletteThreadItems(input: {
         // Opens the thread with find on the word at the matched message, so it is in view.
         run: async () => {
           await item.run();
+          // The longest word, as the most telling ("sidebar" in "fix sidebar"),
+          // as the message writes it ("Café" for "cafe"): find matches accents.
+          const word =
+            messageSearchTokens(messageSearch.query).long.reduce(
+              (longest, token) => (token.length > longest.length ? token : longest),
+              "",
+            ) || messageSearch.query;
+          const shown = findSearchTokenRanges(match.snippet, word)[0];
           requestThreadFindQuery(
             scopedThreadKey(scopeThreadRef(match.environmentId, match.threadId)),
             {
-              // The longest word, as the most telling: "sidebar" in "fix sidebar".
-              query:
-                messageSearchTokens(messageSearch.query).long.reduce(
-                  (longest, token) => (token.length > longest.length ? token : longest),
-                  "",
-                ) || messageSearch.query,
+              query: shown ? match.snippet.slice(shown.start, shown.end) : word,
               ...(match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {}),
             },
           );

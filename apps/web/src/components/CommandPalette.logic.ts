@@ -413,10 +413,10 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     if (thread.branch) {
       descriptionParts.push(`#${thread.branch}`);
     }
-    if (
+    const isCurrent =
       thread.id === input.activeThread?.id &&
-      thread.environmentId === input.activeThread.environmentId
-    ) {
+      thread.environmentId === input.activeThread.environmentId;
+    if (isCurrent) {
       descriptionParts.push("Current thread");
     }
 
@@ -449,6 +449,8 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
       },
       leadingContent ? { titleLeadingContent: leadingContent } : {},
       trailingContent ? { titleTrailingContent: trailingContent } : {},
+      // Last in its group: picking the thread already open does nothing.
+      isCurrent ? { secondary: true } : {},
       {
         run: async () => {
           await input.runThread(thread);

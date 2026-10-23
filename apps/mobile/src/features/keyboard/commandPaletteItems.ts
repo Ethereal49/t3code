@@ -22,6 +22,8 @@ export interface CommandPaletteItem {
   readonly searchTerms: ReadonlyArray<string>;
   /** Thread rows rank by match quality and use instead of by `searchTerms`. */
   readonly threadSearch?: ThreadSearchSubject;
+  /** Listed last in its group, as the thread already open. */
+  readonly secondary?: boolean;
   readonly run: () => void;
 }
 
@@ -68,7 +70,12 @@ export function filterCommandPaletteItems(
   );
   const threadsMatch = groups.some(({ group }) => group === "thread");
   const ranked = groups.flatMap(({ group, ranked: entries }) =>
-    entries
+    [...entries]
+      // Stable, so rank order holds otherwise.
+      .sort(
+        (left, right) =>
+          Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false),
+      )
       .slice(
         0,
         group === "thread"

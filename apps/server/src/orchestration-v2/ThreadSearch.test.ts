@@ -401,6 +401,45 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("keeps a thread picked for the query when the limit cuts", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const sql = yield* SqlClient.SqlClient;
+      const project = ProjectId.make("project:plover");
+      const busy = ThreadId.make("thread:plover-busy");
+      const picked = ThreadId.make("thread:plover-picked");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(busy, project),
+          message(busy, "plover-1", "user", "plover notes", { minute: 3 }),
+          message(busy, "plover-2", "user", "more plover notes", { minute: 4 }),
+          thread(picked, project),
+          message(picked, "plover-old", "user", "one plover mention", { minute: 1 }),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const threadIds = () =>
+        search
+          .search({ query: "plover", limit: 1 })
+          .pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+      assert.deepEqual(yield* threadIds(), [busy]);
+      const at = DateTime.toEpochMillis(yield* DateTime.now);
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.opens', json(${JSON.stringify({
+          openedAt: at,
+          score: 1,
+          picks: [{ query: "plover", at }],
+        })}))
+        WHERE thread_id = ${picked}
+      `;
+      assert.deepEqual(yield* threadIds(), [picked]);
+    }),
+  );
+
   it.effect("matches messages as they read, with links as their text", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -613,6 +652,11 @@ it.effect("starts snippets a few words before the match so one line shows it", (
     assert.notMatch(
       snippet(`x${"🚀".repeat(200)}needle`, "needle"),
       /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
+    );
+    // Emphasis and code marks go, as the thread shows the text.
+    assert.equal(
+      ThreadSearch.buildSearchSnippet("Use **bold** and `code` here", 0),
+      "Use bold and code here",
     );
     // Short text still moves a late match into view.
     assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
