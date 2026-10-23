@@ -16,10 +16,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
-  findSearchTokenRanges,
   normalizeSearchQuery,
+  rankMessageMatches,
   rankSearchItems,
   scoreThreadSearch,
+  type ThreadSearchSubject,
 } from "@t3tools/shared/searchRank";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
@@ -53,9 +54,6 @@ const SearchRow = Schema.Struct({
 // only narrow the indexed matches ("pnpm 12"); alone, a two-letter substring
 // of a message is noise rather than a match.
 const MIN_TOKEN_LENGTH = 3;
-// bm25 ranks every hit; grouping a bounded set of the best ones per thread
-// keeps a common word from turning into a scan of its whole posting list.
-const CANDIDATE_MESSAGE_LIMIT = 400;
 const SNIPPET_LENGTH = 240;
 
 /**
@@ -79,12 +77,18 @@ const SNIPPET_LEAD = 24;
 
 /**
  * Up to 240 characters starting a few words before the first match, with
- * ellipses where the text was cut.
+ * ellipses where the text was cut. Messages can be long, so this finds the
+ * match with a plain lowercase search rather than folding the whole text.
  */
 export function buildSearchSnippet(text: string, query: string): string {
   const normalizedText = text.replace(/\s+/g, " ").trim();
-  const firstMatch = findSearchTokenRanges(normalizedText, normalizeSearchQuery(query))[0];
-  const matchStart = firstMatch?.start ?? 0;
+  const lowerText = normalizedText.toLowerCase();
+  const matchStarts = normalizeSearchQuery(query)
+    .split(" ")
+    .filter((token) => token.length >= MIN_TOKEN_LENGTH)
+    .map((token) => lowerText.indexOf(token))
+    .filter((index) => index !== -1);
+  const matchStart = matchStarts.length === 0 ? 0 : Math.min(...matchStarts);
   if (normalizedText.length <= SNIPPET_LENGTH && matchStart <= SNIPPET_LEAD * 2) {
     return normalizedText;
   }
@@ -137,39 +141,16 @@ export const make = Effect.gen(function* () {
   // One message per active, non-subagent thread: a user message when one
   // matches, since that is what the user remembers asking. Threads order by
   // their best bm25 hit. Every palette and sidebar hides subagent threads, so
-  // their messages would only use up the limit.
+  // their messages would only use up the limit. Filters apply before ranking,
+  // so hidden threads never crowd out a visible match, and message bodies are
+  // read only for the winners.
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
     execute: ({ match, shortTokens, limit }) => sql`
-      WITH hits AS (
-        SELECT rowid, bm25(orchestration_v2_message_search) AS score
-        FROM orchestration_v2_message_search
-        WHERE orchestration_v2_message_search MATCH ${match}
-        ORDER BY rank
-        LIMIT ${CANDIDATE_MESSAGE_LIMIT}
-      ),
-      ranked AS (
-        SELECT
-          threads.thread_id,
-          threads.project_id,
-          messages.role,
-          messages.payload_json,
-          messages.created_at,
-          MIN(hits.score) OVER (PARTITION BY threads.thread_id) AS thread_score,
-          ROW_NUMBER() OVER (
-            PARTITION BY threads.thread_id
-            ORDER BY
-              CASE messages.role WHEN 'user' THEN 0 ELSE 1 END ASC,
-              hits.score ASC,
-              messages.created_at DESC,
-              messages.message_id ASC
-          ) AS thread_match_rank
-        FROM hits
-        INNER JOIN orchestration_v2_projection_messages AS messages
-          ON messages.rowid = hits.rowid
-        INNER JOIN orchestration_v2_projection_threads AS threads
-          ON threads.thread_id = messages.thread_id
+      WITH eligible AS MATERIALIZED (
+        SELECT threads.thread_id
+        FROM orchestration_v2_projection_threads AS threads
         INNER JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
         WHERE threads.deleted_at IS NULL
@@ -177,20 +158,52 @@ export const make = Effect.gen(function* () {
           AND projects.deleted_at IS NULL
           AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
             IS NOT 'subagent'
+      ),
+      hits AS (
+        SELECT
+          messages.rowid AS message_rowid,
+          messages.thread_id,
+          messages.role,
+          messages.created_at,
+          messages.message_id,
+          bm25(orchestration_v2_message_search) AS score
+        FROM orchestration_v2_message_search
+        INNER JOIN orchestration_v2_projection_messages AS messages
+          ON messages.rowid = orchestration_v2_message_search.rowid
+        WHERE orchestration_v2_message_search MATCH ${match}
+          AND messages.thread_id IN eligible
           AND NOT EXISTS (
             SELECT 1 FROM json_each(${shortTokens}) AS token
             WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
           )
+      ),
+      ranked AS (
+        SELECT
+          hits.*,
+          MIN(score) OVER (PARTITION BY thread_id) AS thread_score,
+          ROW_NUMBER() OVER (
+            PARTITION BY thread_id
+            ORDER BY
+              CASE role WHEN 'user' THEN 0 ELSE 1 END ASC,
+              score ASC,
+              created_at DESC,
+              message_id ASC
+          ) AS thread_match_rank
+        FROM hits
       )
       SELECT
-        thread_id AS "threadId",
-        project_id AS "projectId",
-        role AS source,
-        json_extract(payload_json, '$.text') AS "matchText",
-        created_at AS "messageCreatedAt"
+        ranked.thread_id AS "threadId",
+        threads.project_id AS "projectId",
+        ranked.role AS source,
+        json_extract(messages.payload_json, '$.text') AS "matchText",
+        ranked.created_at AS "messageCreatedAt"
       FROM ranked
-      WHERE thread_match_rank = 1
-      ORDER BY thread_score ASC, created_at DESC, thread_id ASC
+      INNER JOIN orchestration_v2_projection_messages AS messages
+        ON messages.rowid = ranked.message_rowid
+      INNER JOIN orchestration_v2_projection_threads AS threads
+        ON threads.thread_id = ranked.thread_id
+      WHERE ranked.thread_match_rank = 1
+      ORDER BY ranked.thread_score ASC, ranked.created_at DESC, ranked.thread_id ASC
       LIMIT ${limit}
     `,
   });
@@ -263,9 +276,9 @@ export const make = Effect.gen(function* () {
     const normalizedQuery = normalizeSearchQuery(input.query);
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const candidates = yield* read(titleCandidates({ projectId: input.projectId ?? null }));
-    const titleHits: ThreadSearchHit[] = rankSearchItems(candidates, (row, options) =>
-      scoreThreadSearch(
-        normalizedQuery,
+    const subjectById = new Map(
+      candidates.map((row): [ThreadId, ThreadSearchSubject] => [
+        row.thread.id,
         {
           id: row.thread.id,
           title: row.thread.title,
@@ -277,9 +290,10 @@ export const make = Effect.gen(function* () {
             ? { ...row.thread.opens, openedAt: DateTime.toEpochMillis(row.thread.opens.openedAt) }
             : null,
         },
-        now,
-        options,
-      ),
+      ]),
+    );
+    const titleHits: ThreadSearchHit[] = rankSearchItems(candidates, (row, options) =>
+      scoreThreadSearch(normalizedQuery, subjectById.get(row.thread.id)!, now, options),
     )
       .slice(0, limit)
       .map(({ item }) => ({
@@ -289,14 +303,19 @@ export const make = Effect.gen(function* () {
         source: "title",
       }));
     if (titleHits.length >= limit) return { matches: titleHits };
-    const titleById = new Map(candidates.map((row) => [row.thread.id, row.thread.title]));
     const shown = new Set(titleHits.map((hit) => hit.threadId));
-    const messageHits = (yield* search({ query: input.query, limit: 50 })).matches.flatMap(
-      (match) => {
-        const title = titleById.get(match.threadId);
-        return title === undefined || shown.has(match.threadId) ? [] : [{ ...match, title }];
-      },
-    );
+    const { matches } = yield* search({ query: input.query, limit: 50 });
+    const messageHits = rankMessageMatches(
+      matches.flatMap((match, rank) =>
+        subjectById.has(match.threadId) && !shown.has(match.threadId) ? [{ ...match, rank }] : [],
+      ),
+      (match) => subjectById.get(match.threadId),
+      normalizedQuery,
+      now,
+    ).map(({ rank: _rank, ...match }) => ({
+      ...match,
+      title: subjectById.get(match.threadId)!.title,
+    }));
     return { matches: [...titleHits, ...messageHits].slice(0, limit) };
   });
 

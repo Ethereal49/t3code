@@ -37,9 +37,18 @@ function foldCharacter(character: string): string {
   return character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
 }
 
-function prepareSearchField(source: string): SearchField {
-  const cached = fieldCache.get(source);
-  if (cached) return cached;
+// Chinese and Japanese text has no spaces, so each ideograph or kana starts a word.
+function isCjk(character: string): boolean {
+  const code = character.codePointAt(0)!;
+  return (
+    (code >= 0x3040 && code <= 0x30ff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xf900 && code <= 0xfaff)
+  );
+}
+
+function foldSearchField(source: string): SearchField {
   let text = "";
   const wordStarts: boolean[] = [];
   const sourceIndex: number[] = [];
@@ -51,7 +60,8 @@ function prepareSearchField(source: string): SearchField {
       (previous === "" ||
         !ALPHANUMERIC.test(previous) ||
         (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
-        DIGIT.test(previous) !== DIGIT.test(character));
+        DIGIT.test(previous) !== DIGIT.test(character) ||
+        isCjk(character));
     const folded = foldCharacter(character);
     for (let offset = 0; offset < folded.length; offset++) {
       text += folded[offset];
@@ -61,7 +71,13 @@ function prepareSearchField(source: string): SearchField {
     previous = character;
     index += character.length;
   }
-  const field = { text, wordStarts, sourceIndex, sourceLength: source.length };
+  return { text, wordStarts, sourceIndex, sourceLength: source.length };
+}
+
+function prepareSearchField(source: string): SearchField {
+  const cached = fieldCache.get(source);
+  if (cached) return cached;
+  const field = foldSearchField(source);
   if (fieldCache.size >= FIELD_CACHE_LIMIT) fieldCache.clear();
   fieldCache.set(source, field);
   return field;
@@ -234,11 +250,12 @@ function matchSearchFields(
 /**
  * Ranges of `text` that contain a query token of three or more characters, for
  * message snippets. Message search matches those tokens as plain substrings
- * and ignores shorter ones, which would light up half the snippet.
+ * and ignores shorter ones, which would light up half the snippet. Snippets
+ * vary per query, so they skip the field cache.
  */
 export function findSearchTokenRanges(text: string, normalizedQuery: string): SearchRange[] {
   if (normalizedQuery.length === 0) return [];
-  const field = prepareSearchField(text);
+  const field = foldSearchField(text);
   const ranges: SearchRange[] = [];
   for (const token of new Set(normalizedQuery.split(" "))) {
     if (token.length < 3) continue;
@@ -347,7 +364,7 @@ export interface ThreadSearchSubject {
  * How much use lifts a thread: 1 for a stale, never-opened thread, about 2 for
  * one active today, and more for threads opened often.
  */
-export function threadUsageBoost(thread: ThreadSearchSubject, now: number): number {
+function threadUsageBoost(thread: ThreadSearchSubject, now: number): number {
   const recency = thread.activityAt === null ? 0 : decay(now - thread.activityAt);
   const opens = thread.opens ? thread.opens.score * decay(now - thread.opens.openedAt) : 0;
   return 1 + recency + 0.5 * Math.log2(1 + opens);
@@ -375,6 +392,16 @@ function matchReference(
 // Strong enough that a thread you just picked for this query wins over a better
 // but unused match. It fades with the thread's last open, so old picks let go.
 const PICK_BOOST = 3;
+// A remembered pick alone lists its thread (one picked through a message
+// match, say), but a single letter is too little to go on.
+const PICK_ONLY_MIN_LENGTH = 2;
+
+function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: number): number {
+  const { opens } = thread;
+  return opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
+    ? PICK_BOOST * decay(now - opens.openedAt)
+    : 0;
+}
 
 export interface ThreadSearchMatch {
   /** Match quality times use; what results sort by. */
@@ -402,19 +429,41 @@ export function scoreThreadSearch(
   }
   if (thread.branch) fields.push({ value: thread.branch, weight: 0.6 });
   if (thread.projectTitle) fields.push({ value: thread.projectTitle, weight: 0.45 });
+  const boost = pickBoost(thread, normalizedQuery, now);
   const match =
     matchSearchFields(normalizedQuery.replace(/^#/, ""), fields, options) ??
-    matchReference(normalizedQuery, thread);
+    matchReference(normalizedQuery, thread) ??
+    (boost > 0 && normalizedQuery.length >= PICK_ONLY_MIN_LENGTH
+      ? { quality: 0.5, primaryRanges: [] }
+      : null);
   if (match === null) return null;
-  const { opens } = thread;
-  const pickBoost = opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
-    ? PICK_BOOST * decay(now - opens.openedAt)
-    : 0;
   return {
-    score: match.quality * (threadUsageBoost(thread, now) + pickBoost),
+    score: match.quality * (threadUsageBoost(thread, now) + boost),
     quality: match.quality,
     titleRanges: match.primaryRanges,
   };
+}
+
+/**
+ * Orders message matches from the server by the same use and pick signals as
+ * title matches. `rank` is the match's position in its own environment's
+ * results, which stand in for text relevance, so environments merge fairly.
+ */
+export function rankMessageMatches<T extends { readonly rank: number }>(
+  matches: ReadonlyArray<T>,
+  subjectOf: (match: T) => ThreadSearchSubject | undefined,
+  normalizedQuery: string,
+  now: number,
+): T[] {
+  return matches
+    .flatMap((match) => {
+      const subject = subjectOf(match);
+      if (!subject) return [];
+      const use = threadUsageBoost(subject, now) + pickBoost(subject, normalizedQuery, now);
+      return [{ match, score: use / (1 + 0.15 * match.rank) }];
+    })
+    .sort((left, right) => right.score - left.score)
+    .map(({ match }) => match);
 }
 
 export interface RankedSearchItem<T, M> {

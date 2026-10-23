@@ -94,7 +94,7 @@ it("merges successful environments and silently ignores failures", () => {
 
   const state = registry.get(searchAtom(makeThreadSearchKey([envB, envA], "needle")));
   expect(state).toEqual({
-    matches: [{ ...result.matches[0], environmentId: envA }],
+    matches: [{ ...result.matches[0], environmentId: envA, rank: 0 }],
     isLoading: false,
   });
   expect(threadSearchMatchKey(state.matches[0]!)).toBe('["env-a","thread-a"]');
@@ -113,6 +113,7 @@ it("keeps the previous results visible only while a refined or widened query is 
         source: "user" as const,
         snippet: "websocket reconnect",
         messageCreatedAt: null,
+        rank: 0,
       },
     ],
   };

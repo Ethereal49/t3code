@@ -249,6 +249,42 @@ it.layer(layerTest)("ThreadSearch", (it) => {
   );
 });
 
+it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
+  it.effect("finds a visible match behind hundreds of hidden or narrower hits", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:crowded");
+      const parent = ThreadId.make("thread:crowded-parent");
+      const subagent = ThreadId.make("thread:crowded-subagent");
+      const older = ThreadId.make("thread:crowded-older");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(parent, project),
+          thread(subagent, project, { subagentOf: parent }),
+          thread(older, project),
+          ...Array.from({ length: 450 }, (_, index) =>
+            message(subagent, `subagent-${index}`, "assistant", "needle needle"),
+          ),
+          ...Array.from({ length: 450 }, (_, index) =>
+            message(older, `older-${index}`, "assistant", "pnpm 11 pnpm"),
+          ),
+          message(parent, "parent-needle", "user", "a needle in a long haystack of other words"),
+          message(parent, "parent-pnpm", "user", "moved the repo to pnpm 12 today"),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+
+      const threadIds = (query: string) =>
+        search.search({ query }).pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+      assert.deepEqual(yield* threadIds("needle"), [parent]);
+      assert.deepEqual(yield* threadIds("pnpm 12"), [parent]);
+    }),
+  );
+});
+
 it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
   it.effect("ranks title matches like the palette, then message matches, within one project", () =>
     Effect.gen(function* () {

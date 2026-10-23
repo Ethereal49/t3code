@@ -1,9 +1,9 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
-  rankThreadMessageMatches,
   rememberThreadSearchPick,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
+import { normalizeSearchQuery, rankMessageMatches } from "@t3tools/shared/searchRank";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -24,6 +24,8 @@ import {
 } from "../state/environments";
 import { useThreadSearch } from "../state/queries";
 import { primaryServerProvidersAtom } from "../state/server";
+import { threadEnvironment } from "../state/threads";
+import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { buildThreadActionItems, ITEM_ICON_CLASS } from "./CommandPalette.logic";
 import { useEnvironmentLookups, useProjectLookups } from "./CommandPaletteLookups";
@@ -80,6 +82,7 @@ export function useCommandPaletteThreadItems(input: {
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);
   const { projectByKey } = useProjectLookups();
+  const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
   const [now] = useState(() => Date.now());
 
@@ -128,7 +131,21 @@ export function useCommandPaletteThreadItems(input: {
       );
     },
     runThread: async (thread) => {
-      if (threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">")) {
+      const picked = threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">");
+      const isOpen =
+        thread.id === activeThread?.id && thread.environmentId === activeThread.environmentId;
+      if (picked && isOpen && thread.lastVisitedAt !== undefined) {
+        // The open thread does not remount, so record the pick here.
+        void visitThread({
+          environmentId: thread.environmentId,
+          input: {
+            threadId: thread.id,
+            visitedAt: thread.updatedAt,
+            opened: true,
+            searchQuery: threadSearchQuery,
+          },
+        });
+      } else if (picked) {
         rememberThreadSearchPick(
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
           threadSearchQuery,
@@ -144,9 +161,10 @@ export function useCommandPaletteThreadItems(input: {
   const itemByValue = new Map(threadItems.map((item) => [item.value, item]));
   const itemForMatch = (match: EnvironmentThreadSearchMatch) =>
     itemByValue.get(`thread:${match.environmentId}:${match.threadId}`);
-  const threadMessageItems = rankThreadMessageMatches(
+  const threadMessageItems = rankMessageMatches(
     messageSearch.matches,
     (match) => itemForMatch(match)?.threadSearch,
+    normalizeSearchQuery(threadSearchQuery),
     now,
   ).flatMap((match) => {
     const item = itemForMatch(match);

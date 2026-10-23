@@ -7,11 +7,7 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
-import {
-  normalizeSearchQuery,
-  threadUsageBoost,
-  type ThreadSearchSubject,
-} from "@t3tools/shared/searchRank";
+import { normalizeSearchQuery, type ThreadSearchSubject } from "@t3tools/shared/searchRank";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import type { EnvironmentThreadShell } from "./models.ts";
@@ -19,6 +15,8 @@ import { getThreadSortTimestamp } from "./threadSort.ts";
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
   readonly environmentId: EnvironmentId;
+  /** Position in its environment's results, which the server orders by relevance. */
+  readonly rank: number;
 }
 
 export interface ThreadSearchResultsState {
@@ -75,9 +73,10 @@ export function createThreadSearchResultsAtomFamily<E>(options: {
         const value = Option.getOrNull(AsyncResult.value(result));
         if (value !== null) {
           matches.push(
-            ...value.matches.map((match) => ({
+            ...value.matches.map((match, rank) => ({
               ...match,
               environmentId,
+              rank,
             })),
           );
         }
@@ -109,25 +108,6 @@ export function threadSearchSubject(
     activityAt: Number.isFinite(activityAt) ? activityAt : null,
     opens: thread.opens ? { ...thread.opens, openedAt: Date.parse(thread.opens.openedAt) } : null,
   };
-}
-
-/**
- * Orders message matches from the server. The server ranks by text relevance
- * per environment; position stands in for that relevance so it can combine
- * with how recently and often each thread was used, as title matches do.
- */
-export function rankThreadMessageMatches<T>(
-  matches: ReadonlyArray<T>,
-  subjectOf: (match: T) => ThreadSearchSubject | undefined,
-  now: number,
-): T[] {
-  return matches
-    .flatMap((match, index) => {
-      const subject = subjectOf(match);
-      return subject ? [{ match, score: threadUsageBoost(subject, now) / (1 + 0.15 * index) }] : [];
-    })
-    .sort((left, right) => right.score - left.score)
-    .map(({ match }) => match);
 }
 
 let pendingSearchPick: { readonly threadKey: string; readonly query: string } | null = null;

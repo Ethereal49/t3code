@@ -1,13 +1,16 @@
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
-  rankThreadMessageMatches,
   rememberThreadSearchPick,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
-import { splitSearchText } from "@t3tools/shared/searchRank";
+import {
+  normalizeSearchQuery,
+  rankMessageMatches,
+  splitSearchText,
+} from "@t3tools/shared/searchRank";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -35,6 +38,8 @@ import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
+import { threadEnvironment } from "../../state/threads";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -58,6 +63,8 @@ const PALETTE_COMMANDS: ReadonlyArray<HardwareKeyboardCommand> = [
   ...THREAD_JUMP_KEYBINDING_COMMANDS,
 ];
 const ROW_HEIGHT = 50;
+// The "In messages" label above the first message match; server results always come last.
+const SECTION_LABEL_HEIGHT = 26;
 
 const ACTION_ICONS: Record<string, AppSymbolName> = {
   newTask: "square.and.pencil",
@@ -177,6 +184,7 @@ export function CommandPalette(props: {
   const threads = useThreadShells();
   const activeThreadRef = useMemo(() => parseActiveThreadPath(props.pathname), [props.pathname]);
   const activeThread = useThreadShell(activeThreadRef);
+  const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [query, setQuery] = useState("");
@@ -389,20 +397,41 @@ export function CommandPalette(props: {
     const subjectByKey = new Map(
       items.flatMap((item) => (item.threadSearch ? [[item.key, item.threadSearch] as const] : [])),
     );
-    const messageMatchKeys = rankThreadMessageMatches(
-      search.matches.map((match) => scopedThreadKey(match.environmentId, match.threadId)),
-      (key) => subjectByKey.get(key),
+    const keyOf = (match: EnvironmentThreadSearchMatch) =>
+      scopedThreadKey(match.environmentId, match.threadId);
+    const messageMatchKeys = rankMessageMatches(
+      search.matches,
+      (match) => subjectByKey.get(keyOf(match)),
+      normalizeSearchQuery(query),
       now,
-    );
+    ).map(keyOf);
     return filterCommandPaletteItems(items, query, messageMatchKeys, now);
   }, [items, now, query, search.matches]);
   // Remember which thread this query picked, so the thread view can record it with the open.
+  // The open thread does not remount, so its pick is recorded here.
   const runResult = (item: CommandPaletteResult) => {
     if (item.kind === "thread" && query.trim() && !query.startsWith(">")) {
-      rememberThreadSearchPick(item.key, query);
+      if (
+        activeThread &&
+        activeThread.lastVisitedAt !== undefined &&
+        item.key === scopedThreadKey(activeThread.environmentId, activeThread.id)
+      ) {
+        void visitThread({
+          environmentId: activeThread.environmentId,
+          input: {
+            threadId: activeThread.id,
+            visitedAt: activeThread.updatedAt,
+            opened: true,
+            searchQuery: query,
+          },
+        });
+      } else {
+        rememberThreadSearchPick(item.key, query);
+      }
     }
     item.run();
   };
+  const firstMessageIndex = results.findIndex((item) => item.fromMessages);
   const selectedIndex = Math.max(
     0,
     results.findIndex((item) => item.key === selection),
@@ -527,8 +556,12 @@ export function CommandPalette(props: {
                 keyboardShouldPersistTaps="handled"
                 keyExtractor={(item) => item.key}
                 getItemLayout={(_, index) => ({
-                  length: ROW_HEIGHT,
-                  offset: ROW_HEIGHT * index,
+                  length: ROW_HEIGHT + (index === firstMessageIndex ? SECTION_LABEL_HEIGHT : 0),
+                  offset:
+                    ROW_HEIGHT * index +
+                    (firstMessageIndex !== -1 && index > firstMessageIndex
+                      ? SECTION_LABEL_HEIGHT
+                      : 0),
                   index,
                 })}
                 contentContainerClassName="pb-2"
@@ -538,14 +571,24 @@ export function CommandPalette(props: {
                   </Text>
                 }
                 renderItem={({ item, index }) => (
-                  <PaletteRow
-                    item={item}
-                    index={index}
-                    selected={item.key === selectedKey}
-                    searchMatch={item.fromMessages ? contentMatchByKey.get(item.key) : undefined}
-                    searchQuery={query}
-                    onSelect={() => close(() => runResult(item))}
-                  />
+                  <>
+                    {index === firstMessageIndex ? (
+                      <Text
+                        className="px-5 pt-2 text-xs text-foreground-muted"
+                        style={{ height: SECTION_LABEL_HEIGHT }}
+                      >
+                        In messages
+                      </Text>
+                    ) : null}
+                    <PaletteRow
+                      item={item}
+                      index={index}
+                      selected={item.key === selectedKey}
+                      searchMatch={item.fromMessages ? contentMatchByKey.get(item.key) : undefined}
+                      searchQuery={query}
+                      onSelect={() => close(() => runResult(item))}
+                    />
+                  </>
                 )}
               />
             </GlassSurface>

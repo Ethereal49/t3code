@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   findSearchTokenRanges,
   normalizeSearchQuery,
+  rankMessageMatches,
   rankSearchGroups,
   rankSearchItems,
   recordThreadOpen,
@@ -112,6 +113,41 @@ describe("scoreThreadSearch", () => {
     expect(
       rankTitles("cmd enter", [thread("Fix Cmd+Enter"), thread("Open links external")]),
     ).toEqual(["Fix Cmd+Enter"]);
+  });
+});
+
+describe("scoreThreadSearch beyond Latin text and titles", () => {
+  it("treats each Chinese or Japanese character as a word start", () => {
+    expect(scoreThreadSearch("搜索", thread("实现全文搜索"), NOW)).not.toBeNull();
+    expect(scoreThreadSearch("検索", thread("新しい検索機能"), NOW)).not.toBeNull();
+  });
+
+  it("lists a thread picked for a query even when only its messages matched", () => {
+    const picked = thread("Hosting alternatives", {
+      opens: { openedAt: NOW - DAY, score: 1, queries: ["tigris"] },
+    });
+    expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
+    expect(rankTitles("t", [picked])).toEqual([]);
+  });
+});
+
+describe("rankMessageMatches", () => {
+  it("merges environments by each match's own rank and lets use and picks decide", () => {
+    const subjects = new Map([
+      ...Array.from({ length: 50 }, (_, index) => [`a${index}`, thread(`A ${index}`)] as const),
+      ["b0", thread("B recent", { activityAt: NOW })],
+      ["b1", thread("B picked", { opens: { openedAt: NOW, score: 1, queries: ["needle"] } })],
+    ]);
+    const matches = [
+      ...Array.from({ length: 50 }, (_, rank) => ({ key: `a${rank}`, rank })),
+      { key: "b0", rank: 0 },
+      { key: "b1", rank: 1 },
+    ];
+    expect(
+      rankMessageMatches(matches, (match) => subjects.get(match.key), "needle", NOW)
+        .slice(0, 3)
+        .map((match) => match.key),
+    ).toEqual(["b1", "b0", "a0"]);
   });
 });
 
