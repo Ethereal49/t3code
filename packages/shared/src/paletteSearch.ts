@@ -67,6 +67,25 @@ function hasCjkWord(token: string): boolean {
   });
 }
 
+/**
+ * Whether `character` starts a word after `previous` and `beforePrevious`
+ * ("" at the start): after a non-letter, at a camelCase or digit boundary, or
+ * at any Chinese or Japanese character. The one rule for titles and messages.
+ */
+function isWordStart(beforePrevious: string, previous: string, character: string): boolean {
+  // "Julius’s": a possessive or contraction does not start a word.
+  const afterApostrophe = APOSTROPHE.test(previous) && ALPHANUMERIC.test(beforePrevious);
+  return (
+    (ALPHANUMERIC.test(character) || SYMBOL.test(character)) &&
+    !afterApostrophe &&
+    (previous === "" ||
+      !ALPHANUMERIC.test(previous) ||
+      (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
+      DIGIT.test(previous) !== DIGIT.test(character) ||
+      isCjk(character))
+  );
+}
+
 function foldSearchField(source: string): SearchField {
   let text = "";
   const wordStarts: number[] = [];
@@ -76,16 +95,7 @@ function foldSearchField(source: string): SearchField {
   let beforePrevious = "";
   let index = 0;
   for (const character of source) {
-    // "Julius’s": a possessive or contraction does not start a word.
-    const afterApostrophe = APOSTROPHE.test(previous) && ALPHANUMERIC.test(beforePrevious);
-    const startsWord =
-      (ALPHANUMERIC.test(character) || SYMBOL.test(character)) &&
-      !afterApostrophe &&
-      (previous === "" ||
-        !ALPHANUMERIC.test(previous) ||
-        (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
-        DIGIT.test(previous) !== DIGIT.test(character) ||
-        isCjk(character));
+    const startsWord = isWordStart(beforePrevious, previous, character);
     const folded = foldCharacter(character);
     identity &&= folded.length === 1 && character.length === 1;
     for (let offset = 0; offset < folded.length; offset++) {
@@ -430,17 +440,11 @@ function accentedFormsOf(token: string): RegExp | null {
   return forms ? new RegExp(`[${forms}]`) : null;
 }
 
-// Where a word starts in `text`, by the rules of `foldSearchField`.
 function startsWordAt(text: string, index: number): boolean {
-  if (index === 0) return true;
-  const previous = text[index - 1]!;
   const character = text[index]!;
-  return (
-    !ALPHANUMERIC.test(previous) ||
-    (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
-    DIGIT.test(previous) !== DIGIT.test(character) ||
-    isCjk(character)
-  );
+  // A token that opens with punctuation (".ts", "#22889") brings its own boundary.
+  if (!ALPHANUMERIC.test(character) && !SYMBOL.test(character)) return true;
+  return isWordStart(text[index - 2] ?? "", text[index - 1] ?? "", character);
 }
 
 export interface MessageMatch {

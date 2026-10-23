@@ -441,6 +441,7 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
     expect(scoreMessageMatch("Upgrade pnpm 512 today", "pnpm 12")).toBeNull();
     expect(scoreMessageMatch("Upgrade to pnpm12 today", "pnpm 12")?.quality).toBe(1);
+    expect(scoreMessageMatch("Rename the file to index.ts", ".ts")?.quality).toBe(1);
   });
 
   it("finds words through case and accents, also after the same letters inside a word", () => {
