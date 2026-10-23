@@ -66,6 +66,8 @@ const SNIPPET_LENGTH = 240;
 const MESSAGE_HIT_LIMIT = 2000;
 // Reads of that many hits per search, when the first is full of weak matches.
 const MESSAGE_READ_LIMIT = 3;
+// Whole-word threads that end the reads early: more than a palette shows.
+const WHOLE_WORD_THREAD_GOAL = 10;
 // Without the index, how many of the newest messages a search scans.
 const MESSAGE_SCAN_LIMIT = 20_000;
 
@@ -363,6 +365,11 @@ export const make = Effect.gen(function* () {
         const { match, wordMatch, substrings } = messageSearch;
         const projectId = input.projectId;
         const limit = input.limit ?? 50;
+        // Three letters are usually the start of a longer word ("con" for
+        // "config"), so only longer words read on for whole-word matches.
+        const wantsWholeWords = messageSearchTokens(input.query).long.every(
+          (token) => Array.from(token).length >= 4,
+        );
         // A full page can hold few words ("ing" sits mostly inside words), few
         // threads (one busy thread's newest messages), or only prefixes ("rusty"
         // for "rust"). Read on past the threads that already have a word
@@ -381,7 +388,10 @@ export const make = Effect.gen(function* () {
           if (rows.length < MESSAGE_HIT_LIMIT) return;
           mostlyInsideWords = words * 2 < rows.length;
           const wholeWordThreads = [...best.values()].filter((hit) => hit.quality === 1).length;
-          if (!mostlyInsideWords && wholeWordThreads >= limit) return;
+          const enoughThreads =
+            best.size >= limit &&
+            (!wantsWholeWords || wholeWordThreads >= Math.min(limit, WHOLE_WORD_THREAD_GOAL));
+          if (!mostlyInsideWords && enoughThreads) return;
           excludedThreadIds = [...best].flatMap(([threadId, hit]) =>
             hit.midWord ? [] : [threadId],
           );
