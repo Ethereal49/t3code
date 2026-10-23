@@ -231,7 +231,9 @@ export function symbolicateStack(stack: string, map: CompactSourceMap): Symbolic
     growth += position.source.length + lineAndColumn.length - match[0].length;
     if (growth > MAX_STACK_GROWTH) return line;
     mappedFrames += 1;
-    return line.replace(match[0], position.source + lineAndColumn);
+    // Spliced, not `replace`d: a replacement string would expand `$&` and `$'` in the path.
+    const end = match.index + match[0].length;
+    return line.slice(0, match.index) + position.source + lineAndColumn + line.slice(end);
   });
   return { stack: lines.join("\n"), bundleFrames, mappedFrames };
 }

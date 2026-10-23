@@ -118,6 +118,12 @@ describe("symbolicateStack", () => {
     expect(result.stack.length).toBeLessThan(1024 * 1024 + 100 * frames[0]!.length);
   });
 
+  it("writes source paths verbatim, even ones that look like replacement patterns", () => {
+    const map = decodeSourceMap({ version: 3, sources: ["$'/$&.js"], mappings: "AAAA" })!;
+    const stack = "Error\n    at f (address at index.android.bundle:1:0) tail";
+    expect(symbolicateStack(stack, map).stack).toBe("Error\n    at f ($'/$&.js:1:1) tail");
+  });
+
   it("leaves frames the map does not cover as they were", () => {
     const map = decodeSourceMap({ version: 3, sources: ["a.js"], mappings: "kBAAA" })!;
     const stack = "Error\n    at f (address at index.android.bundle:1:3)";
