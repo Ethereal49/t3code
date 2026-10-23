@@ -314,18 +314,22 @@ export const make = Effect.gen(function* () {
     input: OrchestrationSearchThreadsInput & { readonly projectId: ProjectId | null },
   ) {
     // One message per thread: the best word match, then what the user wrote,
-    // since that is what they remember asking. Rows arrive newest first, so
-    // ties keep the newest. Threads order by that match, then by its age;
-    // text relevance (bm25) would cost a pass over every hit in history.
+    // since that is what they remember asking, then the newest by when it was
+    // written. Threads order by that match, then its age. Row order is not
+    // age: imported histories arrive in one batch. Text relevance (bm25)
+    // would cost a pass over every hit in history.
     type Hit = {
       readonly row: typeof SearchRow.Type;
       readonly quality: number;
       readonly midWord: boolean;
       readonly offset: number;
     };
+    const newer = (left: Hit, right: Hit) =>
+      (right.row.messageCreatedAt ?? "").localeCompare(left.row.messageCreatedAt ?? "");
     const compareHits = (left: Hit, right: Hit) =>
       right.quality - left.quality ||
-      Number(left.row.source !== "user") - Number(right.row.source !== "user");
+      Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
+      newer(left, right);
     const best = new Map<ThreadId, Hit>();
     // Returns how many rows matched as words.
     const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
@@ -369,8 +373,7 @@ export const make = Effect.gen(function* () {
       }),
     );
     const ranked = [...best.values()].sort(
-      (left, right) =>
-        right.quality - left.quality || right.row.messageRowid - left.row.messageRowid,
+      (left, right) => right.quality - left.quality || newer(left, right),
     );
     return {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, midWord, offset }) => ({

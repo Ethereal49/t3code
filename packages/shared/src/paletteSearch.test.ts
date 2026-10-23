@@ -206,21 +206,21 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       pullRequests: [{ number: 22889, title: "Smaller MCP payloads" }],
     });
     for (const query of ["pr 22889", "pr22889", "pull 22889", "pull request #22889"]) {
-      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW)?.hint, query).toEqual({
+      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW)?.explain?.(), query).toEqual({
         label: "PR",
         text: "#22889 Smaller MCP payloads",
         ranges: [{ start: 1, end: 6 }],
       });
     }
     // The app's own worktree prefix is not part of what the branch says.
-    expect(scoreThreadSearch("cleanup", subject, NOW)?.hint).toEqual({
+    expect(scoreThreadSearch("cleanup", subject, NOW)?.explain?.()).toEqual({
       label: "Branch",
       text: "cleanup-payloads",
       ranges: [{ start: 0, end: 7 }],
     });
-    expect(scoreThreadSearch("trim", subject, NOW)?.hint).toBeUndefined();
+    expect(scoreThreadSearch("trim", subject, NOW)?.explain?.()).toBeUndefined();
     // Split across fields, the hint shows the first field with some of the words.
-    expect(scoreThreadSearch("cleanup smaller", subject, NOW)?.hint).toEqual({
+    expect(scoreThreadSearch("cleanup smaller", subject, NOW)?.explain?.()).toEqual({
       label: "PR",
       text: "#22889 Smaller MCP payloads",
       ranges: [{ start: 7, end: 14 }],
@@ -229,7 +229,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     const long = thread("Wave 1F", {
       pullRequests: [{ number: 15033, title: "perf: cheaper shell refreshes, fewer MCP payloads" }],
     });
-    expect(scoreThreadSearch("mcp", long, NOW)?.hint).toEqual({
+    expect(scoreThreadSearch("mcp", long, NOW)?.explain?.()).toEqual({
       label: "PR",
       text: "…fewer MCP payloads",
       ranges: [{ start: 7, end: 10 }],
@@ -260,6 +260,10 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("vscode", threads)).toEqual(["VS Code extension settings"]);
     expect(rankTitles("fixuibug", threads)).toEqual(["Fix UI bug in sidebar"]);
     expect(rankTitles("lint", threads)).toEqual([]);
+    // Short words before a mere prefix are a coincidence.
+    expect(rankTitles("inth", [thread("Show skill names in thread overview")])).toEqual([]);
+    expect(rankTitles("tos", [thread("Move Client State to Server")])).toEqual([]);
+    expect(rankTitles("t3co", [thread("T3 Code vs Gemini")])).toEqual(["T3 Code vs Gemini"]);
     expect(rankTitles("strasse", [thread("Straße bauen")])).toEqual(["Straße bauen"]);
     // Joined words beat an earlier match inside a word.
     expect(scoreThreadSearch("vscode", thread("Fixvscode and VS Code"), NOW)?.quality).toBe(0.6);
@@ -296,7 +300,7 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "tigris", at: NOW - DAY }] },
     });
     expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
-    expect(scoreThreadSearch("tig", picked, NOW)?.hint).toEqual({
+    expect(scoreThreadSearch("tig", picked, NOW)?.explain?.()).toEqual({
       label: "Picked before for",
       text: "tigris",
       ranges: [],
@@ -438,6 +442,14 @@ describe("rankSearchGroups", () => {
 });
 
 describe("rankSearchGroups with keywords and picks", () => {
+  it("matches inside a word only in thread titles", () => {
+    expect(scoreSearchTerms("arch", ["Search project contents"])).toBeNull();
+    expect(
+      scoreThreadSearch("arch", thread("Notes", { branch: "research-extension-system" }), NOW),
+    ).toBeNull();
+    expect(scoreThreadSearch("arch", thread("Research notes"), NOW)?.quality).toBe(0.3);
+  });
+
   it("forgives typos in names but not in hidden keywords", () => {
     const groups = rankSearchGroups(
       [

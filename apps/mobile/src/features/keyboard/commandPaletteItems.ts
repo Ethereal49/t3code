@@ -55,7 +55,10 @@ export function filterCommandPaletteItems(
   const kinds = ["action", "thread", "project"] as const;
   const groups = rankSearchGroups(
     kinds.map((kind) => ({ group: kind, items: candidates.filter((item) => item.kind === kind) })),
-    (item, options): (SearchTermsMatch & { hint?: SearchMatchHint }) | null => {
+    (
+      item,
+      options,
+    ): (SearchTermsMatch & { explain?: () => SearchMatchHint | undefined }) | null => {
       if (!item.threadSearch) {
         return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
       }
@@ -74,11 +77,11 @@ export function filterCommandPaletteItems(
             ? PALETTE_SECONDARY_LIMIT
             : entries.length,
       )
-      .map(({ item, match }): CommandPaletteResult => ({
-        ...item,
-        titleRanges: match.ranges,
-        ...(match.hint ? { matchHint: match.hint } : {}),
-      })),
+      .map(({ item, match }): CommandPaletteResult => {
+        // Built only for the rows shown.
+        const matchHint = match.explain?.();
+        return { ...item, titleRanges: match.ranges, ...(matchHint ? { matchHint } : {}) };
+      }),
   );
   if (actionsOnly) return ranked;
 

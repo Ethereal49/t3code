@@ -477,7 +477,7 @@ function rankPaletteItem(
   readonly groupQuality?: number;
   readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
-  readonly hint?: SearchMatchHint;
+  readonly explain?: () => SearchMatchHint | undefined;
   readonly pickedAt?: number;
   readonly pickedExactly?: boolean;
 } | null {
@@ -567,25 +567,25 @@ export function filterCommandPaletteGroups(input: {
   const threadsMatch = ranked.some(({ group }) => group.value === "threads-search");
   const groups = ranked.map(({ group, ranked }): CommandPaletteGroup => {
     // Secondary items stay below the rest; the sort is stable, so score order holds.
-    const items = ranked
-      .toSorted(
-        (left, right) =>
-          Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false),
-      )
-      .map(({ item, match }) =>
-        match.ranges.length > 0
-          ? { ...item, titleRanges: match.ranges }
-          : match.hint
-            ? { ...item, matchHint: match.hint }
-            : item,
-      );
     const limit =
       group.value === "threads-search"
         ? PALETTE_THREAD_LIMIT
         : searchesEverything && threadsMatch
           ? PALETTE_SECONDARY_LIMIT
-          : items.length;
-    return { value: group.value, label: group.label, items: items.slice(0, limit) };
+          : ranked.length;
+    // Hints are built only for the rows shown.
+    const items = ranked
+      .toSorted(
+        (left, right) =>
+          Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false),
+      )
+      .slice(0, limit)
+      .map(({ item, match }) => {
+        if (match.ranges.length > 0) return { ...item, titleRanges: match.ranges };
+        const matchHint = match.explain?.();
+        return matchHint ? { ...item, matchHint } : item;
+      });
+    return { value: group.value, label: group.label, items };
   });
 
   if (!searchesEverything || !input.threadMessageItems?.length) return groups;

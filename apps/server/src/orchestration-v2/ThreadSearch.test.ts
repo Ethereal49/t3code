@@ -304,6 +304,33 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("orders message matches by when they were written, not by row order", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:written");
+      yield* createProject(project);
+      const recent = ThreadId.make("thread:written-recent");
+      const imported = ThreadId.make("thread:written-imported");
+      // An imported history lands after newer messages in row order.
+      yield* Effect.forEach(
+        [
+          thread(recent, project),
+          message(recent, "written-recent", "user", "kestrel deploy notes", { minute: 30 }),
+          thread(imported, project),
+          message(imported, "written-imported", "user", "kestrel deploy notes", { minute: 1 }),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "kestrel" });
+      assert.deepEqual(
+        matches.map((match) => match.threadId),
+        [recent, imported],
+      );
+    }),
+  );
+
   it.effect("finds an older word when one busy thread fills the newest hits", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

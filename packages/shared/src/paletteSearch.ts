@@ -223,7 +223,8 @@ interface TokenMatch extends SearchRange {
 
 /**
  * Best match of one folded query token in a field. Tokens shorter than four
- * characters only match at a word start ("del" should not find "model"). With
+ * characters only match at a word start ("del" should not find "model"), and
+ * longer ones only inside a word where `midWord` allows it. With
  * `typos`, a three-character token may swap a pair and a longer one may carry
  * one typo in a word prefix that keeps its first letter. Numbers never match
  * with a typo: 22889 is not pull request 22189. In a `name`, the token may also
@@ -235,6 +236,7 @@ function matchToken(
   token: string,
   typos: boolean,
   name: boolean,
+  midWord: boolean,
 ): TokenMatch | null {
   if (token.length === 0) return null;
   let best: TokenMatch | null = null;
@@ -260,7 +262,7 @@ function matchToken(
         best = { score, start: index, end: index + token.length };
       }
       if (score === WHOLE_WORD) return best;
-    } else if (token.length >= 4 && best === null) {
+    } else if (midWord && token.length >= 4 && best === null) {
       best = { score: MID_WORD, start: index, end: index + token.length };
     }
   }
@@ -315,11 +317,13 @@ function matchJoinedWords(field: SearchField, token: string): TokenMatch | null 
     const letters: SearchRange[] = [];
     let at = start;
     let rest = token;
+    let lastWhole = false;
     while (rest.length > 0 && at < field.text.length) {
       const end = wordEnd(field, at);
       const word = field.text.slice(at, end);
       if (word.startsWith(rest)) {
         letters.push({ start: at, end: at + rest.length });
+        lastWhole = rest.length === word.length;
         rest = "";
       } else if (rest.startsWith(word)) {
         letters.push({ start: at, end });
@@ -330,7 +334,12 @@ function matchJoinedWords(field: SearchField, token: string): TokenMatch | null 
         break;
       }
     }
-    if (rest.length === 0 && letters.length > 1) {
+    // Short words before a mere prefix are a coincidence inside a title
+    // ("inth" is not "in th(read)"), but not at its start ("t3co" is "T3
+    // Co(de)"), nor before a whole word ("vscode" is "VS Code").
+    const shortBefore = letters.slice(0, -1).some((range) => range.end - range.start < 3);
+    const atStart = start === field.wordStarts.indexOf(1);
+    if (rest.length === 0 && letters.length > 1 && (lastWhole || atStart || !shortBefore)) {
       return { score: JOINED_WORDS, start, end: letters.at(-1)!.end, letters };
     }
   }
@@ -401,6 +410,12 @@ interface WeightedSearchField {
    * joined words or typos for the titles.
    */
   readonly context?: boolean;
+  /**
+   * A token of four or more letters may match inside a word here. Only thread
+   * titles allow it: inside a command name or a branch it reads as junk
+   * ("arch" in "Search").
+   */
+  readonly midWord?: boolean;
 }
 
 interface SearchFieldsMatch {
@@ -449,6 +464,7 @@ function matchSearchFields(
       wholeWords: field.wholeWords ?? false,
       keyword: field.keyword ?? false,
       context: field.context ?? false,
+      allowMidWord: field.midWord ?? false,
     }));
   const primary = fields[0]?.value ? prepared[0]?.field : undefined;
   // An empty token would match everywhere, and loop forever in `matchToken`.
@@ -461,11 +477,11 @@ function matchSearchFields(
     let best = 0;
     let bestPrimary: TokenMatch | null = null;
     let atWordStart = false;
-    for (const { field, weight, wholeWords, keyword, context } of prepared) {
+    for (const { field, weight, wholeWords, keyword, context, allowMidWord } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
       const typos = (options?.typos ?? false) && !keyword;
       // Joined words and initials only count in the name.
-      const match = matchToken(field, token, typos, field === primary);
+      const match = matchToken(field, token, typos, field === primary, allowMidWord);
       if (match === null || match.score < (wholeWords ? WHOLE_WORD : keyword ? 0.7 : 0)) continue;
       if (field === primary) bestPrimary = match;
       if (match.score >= 0.7 && !context) atWordStart = true;
@@ -949,8 +965,11 @@ export interface ThreadSearchMatch {
   /** Every token matched at a word start; see `rankSearchGroups`. */
   readonly strong: boolean;
   readonly titleRanges: ReadonlyArray<SearchRange>;
-  /** Why the thread matched when its title shows no match, for the result row. */
-  readonly hint?: SearchMatchHint;
+  /**
+   * Why the thread matched when its title shows no match, for the result row.
+   * Built on demand, so only the rows shown pay for it.
+   */
+  readonly explain?: () => SearchMatchHint | undefined;
   /** When the thread was picked for this query, while that pick lasts; see `rankSearchGroups`. */
   readonly pickedAt?: number;
   /** Picked for exactly this query, which also lifts its group; see `rankSearchGroups`. */
@@ -1061,7 +1080,7 @@ export function scoreThreadSearch(
     readonly picks?: boolean;
   },
 ): ThreadSearchMatch | null {
-  const fields: WeightedSearchField[] = [{ value: thread.title, weight: 1 }];
+  const fields: WeightedSearchField[] = [{ value: thread.title, weight: 1, midWord: true }];
   for (const pullRequest of thread.pullRequests ?? []) {
     fields.push({ value: `#${pullRequest.number}`, weight: 1 });
     if (pullRequest.title) fields.push({ value: pullRequest.title, weight: 0.5 });
@@ -1089,20 +1108,21 @@ export function scoreThreadSearch(
     referenceMatch ??
     (pickOnly ? { quality: 0.5, strong: false, primaryRanges: [] } : null);
   if (match === null) return null;
-  const hint =
+  const explain =
     match.primaryRanges.length > 0
       ? undefined
-      : referenceMatch
-        ? { label: "ID or link", text: normalizedQuery, ranges: [] }
-        : pickOnly
-          ? { label: "Picked before for", text: pick!.query, ranges: [] }
-          : matchHint(fieldQuery, thread, options?.typos ?? false);
+      : (): SearchMatchHint | undefined =>
+          referenceMatch
+            ? { label: "ID or link", text: normalizedQuery, ranges: [] }
+            : pickOnly
+              ? { label: "Picked before for", text: pick!.query, ranges: [] }
+              : matchHint(fieldQuery, thread, options?.typos ?? false);
   return {
     score: match.quality * threadUsageBoost(thread, now),
     quality: match.quality,
     strong: match.strong,
     titleRanges: match.primaryRanges,
-    ...(hint ? { hint } : {}),
+    ...(explain ? { explain } : {}),
     ...(pickedAt === undefined ? {} : { pickedAt }),
     ...(pick?.query === pickedQuery(normalizedQuery) ? { pickedExactly: true } : {}),
   };
@@ -1219,6 +1239,7 @@ export function rankSearchGroups<
       // matched through its project does not pass a title that holds the words.
       const sorted = [...items].sort(
         (left, right) =>
+          Number(right.match.pickedExactly ?? false) - Number(left.match.pickedExactly ?? false) ||
           (right.match.pickedAt ?? 0) - (left.match.pickedAt ?? 0) ||
           matchClass(right.match.quality) - matchClass(left.match.quality) ||
           right.match.score - left.match.score,
