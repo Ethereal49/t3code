@@ -107,54 +107,53 @@ export class SourceMaps extends Context.Service<
  * isolate, not per request: decoding a production map costs ~150 ms.
  * `get` answers undefined when nothing is stored under a key.
  */
-export const makeSourceMaps = (
+export const makeSourceMaps = Effect.fn("MobileTelemetry.makeSourceMaps")(function* (
   get: (key: string) => Effect.Effect<StoredSourceMap | undefined, SourceMapObjectError>,
-) =>
-  Effect.gen(function* () {
-    // Keyed by the candidate keys for one bundle, so a launch that only has a
-    // build map resolves with one cache entry rather than a miss and a hit.
-    const cache = yield* Cache.makeWith(
-      (candidates: string) =>
-        Effect.gen(function* () {
-          for (const key of candidates.split("|")) {
-            const stored = yield* get(key);
-            if (stored === undefined) continue;
-            if (stored.size > MAX_SOURCE_MAP_BYTES) {
-              yield* Effect.logWarning("Stored mobile source map is too large", {
-                key,
-                size: stored.size,
-              });
-              continue;
-            }
-            const map = decodeSourceMap(parseJson(yield* stored.text));
-            if (map) return { key, map } satisfies FoundSourceMap;
-            yield* Effect.logWarning("Stored mobile source map could not be decoded", { key });
+) {
+  // Keyed by the candidate keys for one bundle, so a launch that only has a
+  // build map resolves with one cache entry rather than a miss and a hit.
+  const cache = yield* Cache.makeWith(
+    (candidates: string) =>
+      Effect.gen(function* () {
+        for (const key of candidates.split("|")) {
+          const stored = yield* get(key);
+          if (stored === undefined) continue;
+          if (stored.size > MAX_SOURCE_MAP_BYTES) {
+            yield* Effect.logWarning("Stored mobile source map is too large", {
+              key,
+              size: stored.size,
+            });
+            continue;
           }
-          return undefined;
-        }),
-      {
-        capacity: SOURCE_MAP_CACHE_CAPACITY,
-        timeToLive: (exit) =>
-          Exit.isFailure(exit)
-            ? FAILED_SOURCE_MAP_TTL
-            : exit.value
-              ? Duration.infinity
-              : MISSING_SOURCE_MAP_TTL,
-      },
-    );
-    return SourceMaps.of({
-      find: (keys) =>
-        keys.length === 0
-          ? Effect.undefined
-          : Cache.get(cache, keys.join("|")).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("Mobile source map lookup failed", { key: error.key }).pipe(
-                  Effect.as(undefined),
-                ),
+          const map = decodeSourceMap(parseJson(yield* stored.text));
+          if (map) return { key, map } satisfies FoundSourceMap;
+          yield* Effect.logWarning("Stored mobile source map could not be decoded", { key });
+        }
+        return undefined;
+      }),
+    {
+      capacity: SOURCE_MAP_CACHE_CAPACITY,
+      timeToLive: (exit) =>
+        Exit.isFailure(exit)
+          ? FAILED_SOURCE_MAP_TTL
+          : exit.value
+            ? Duration.infinity
+            : MISSING_SOURCE_MAP_TTL,
+    },
+  );
+  return SourceMaps.of({
+    find: (keys) =>
+      keys.length === 0
+        ? Effect.undefined
+        : Cache.get(cache, keys.join("|")).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Mobile source map lookup failed", { key: error.key }).pipe(
+                Effect.as(undefined),
               ),
             ),
-    });
+          ),
   });
+});
 
 export class MobileTelemetry extends Context.Service<
   MobileTelemetry,
