@@ -699,11 +699,13 @@ export const PALETTE_MESSAGE_LIMIT = 10;
 /** Next to matching threads, other groups show only their best few rows. */
 export const PALETTE_SECONDARY_LIMIT = 3;
 
-// Every token at a word start of a main field (0.7 and up), or weaker. Whole
-// word against prefix is too fine a line for group order: "compact" must not
-// lift a setting named "Compact…" over the thread "Compaction…".
+// Every token at a word start of a main field (0.7 and up), a typo in a main
+// field (0.4 and up), or weaker. Whole word against prefix is too fine a line
+// for group order: "compact" must not lift a setting named "Compact…" over the
+// thread "Compaction…". But "keybindngs" is the setting of that name, not a
+// command that lists it as a keyword.
 function matchClass(quality: number): number {
-  return quality >= 0.7 ? 1 : 0;
+  return quality >= 0.7 ? 2 : quality >= 0.4 ? 1 : 0;
 }
 
 export interface RankedSearchItem<T, M> {
@@ -714,7 +716,7 @@ export interface RankedSearchItem<T, M> {
 /**
  * Ranks grouped items, best score first within each group. Groups with no
  * match are dropped. The rest order by the class of their best match (word
- * starts or weaker), and ties keep the given order. Classes
+ * starts, typos in a name, or weaker), and ties keep the given order. Classes
  * rather than scores keep the group order steady while a word is typed, and
  * keep use, which only counts for threads, from outweighing a command that
  * matches as well.

@@ -270,6 +270,19 @@ describe("rankSearchGroups", () => {
   });
 });
 
+describe("rankSearchGroups with typos", () => {
+  it("puts a typo in a name above the same typo in another result's keywords", () => {
+    const groups = rankSearchGroups(
+      [
+        { group: "actions", items: [["Open settings", "settings", "keybindings"]] },
+        { group: "settings", items: [["Keybindings", "General"]] },
+      ],
+      (terms, options) => scoreSearchTerms("keybindngs", terms, options),
+    );
+    expect(groups.map(({ group }) => group)).toEqual(["settings", "actions"]);
+  });
+});
+
 describe("recordThreadOpen", () => {
   it("decays the open count, merges quick reopens, and keeps the latest picked queries", () => {
     const first = recordThreadOpen(null, NOW, "  Upl ");
