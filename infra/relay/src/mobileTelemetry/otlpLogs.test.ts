@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   applySymbolication,
   collectJsExceptions,
-  sourceMapKeys,
+  bundleSourceMapKey,
   type BundleIdentity,
 } from "./otlpLogs.ts";
 import { decodeSourceMap } from "./sourceMap.ts";
@@ -35,20 +35,26 @@ const attributeValue = (attributes: ReadonlyArray<unknown>, key: string) =>
     (attribute) => attribute.key === key,
   )?.value.stringValue;
 
-describe("sourceMapKeys", () => {
-  it("tries the update's map, then the embedded bundle's", () => {
+describe("bundleSourceMapKey", () => {
+  it("uses the update's map for an OTA launch, even when the build is known", () => {
     expect(
-      sourceMapKeys({ platform: "android", updateId: UPDATE_ID, easBuildId: BUILD_ID }),
-    ).toEqual([`android/ota/${UPDATE_ID}.map`, `android/build/${BUILD_ID}.map`]);
+      bundleSourceMapKey({ platform: "android", updateId: UPDATE_ID, easBuildId: BUILD_ID }),
+    ).toBe(`android/ota/${UPDATE_ID}.map`);
   });
 
-  it("drops ids that are not plain identifiers", () => {
+  it("uses the build's map for an embedded launch", () => {
+    expect(bundleSourceMapKey({ platform: "ios", updateId: undefined, easBuildId: BUILD_ID })).toBe(
+      `ios/build/${BUILD_ID}.map`,
+    );
+  });
+
+  it("names no map for ids that are not plain identifiers", () => {
     const identity: BundleIdentity = {
       platform: "ios",
       updateId: "../build/other",
-      easBuildId: undefined,
+      easBuildId: BUILD_ID,
     };
-    expect(sourceMapKeys(identity)).toEqual([]);
+    expect(bundleSourceMapKey(identity)).toBeUndefined();
   });
 });
 

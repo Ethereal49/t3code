@@ -23,7 +23,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { RelayApi } from "@t3tools/contracts/relay";
 
-import { applySymbolication, collectJsExceptions, sourceMapKeys } from "./otlpLogs.ts";
+import { applySymbolication, bundleSourceMapKey, collectJsExceptions } from "./otlpLogs.ts";
 import { decodeSourceMap, type CompactSourceMap } from "./sourceMap.ts";
 
 /** Observe splits batches the endpoint answers 413 for, so this only bounds one request. */
@@ -93,12 +93,12 @@ export interface FoundSourceMap {
   readonly map: CompactSourceMap;
 }
 
-/** Decoded source maps, looked up by the keys `sourceMapKeys` lists for a bundle. */
+/** Decoded source maps, by the key `bundleSourceMapKey` gives for a bundle. */
 export class SourceMaps extends Context.Service<
   SourceMaps,
   {
-    /** The first stored map among `keys`, or undefined when none is stored or readable. */
-    readonly find: (keys: ReadonlyArray<string>) => Effect.Effect<FoundSourceMap | undefined>;
+    /** Undefined when no map is stored under `key` or it cannot be read. */
+    readonly find: (key: string) => Effect.Effect<FoundSourceMap | undefined>;
   }
 >()("t3code-relay/mobileTelemetry/MobileTelemetry/SourceMaps") {}
 
@@ -113,25 +113,21 @@ export class SourceMapObjects extends Context.Service<
 
 const makeSourceMaps = Effect.gen(function* () {
   const objects = yield* SourceMapObjects;
-  // Keyed by the candidate keys for one bundle, so a launch that only has a
-  // build map resolves with one cache entry rather than a miss and a hit.
   const cache = yield* Cache.makeWith(
-    (candidates: string) =>
+    (key: string) =>
       Effect.gen(function* () {
-        for (const key of candidates.split("|")) {
-          const stored = yield* objects.get(key);
-          if (stored === undefined) continue;
-          if (stored.size > MAX_SOURCE_MAP_BYTES) {
-            yield* Effect.logWarning("Stored mobile source map is too large", {
-              key,
-              size: stored.size,
-            });
-            continue;
-          }
-          const map = decodeSourceMap(parseJson(yield* stored.text));
-          if (map) return { key, map } satisfies FoundSourceMap;
-          yield* Effect.logWarning("Stored mobile source map could not be decoded", { key });
+        const stored = yield* objects.get(key);
+        if (stored === undefined) return undefined;
+        if (stored.size > MAX_SOURCE_MAP_BYTES) {
+          yield* Effect.logWarning("Stored mobile source map is too large", {
+            key,
+            size: stored.size,
+          });
+          return undefined;
         }
+        const map = decodeSourceMap(parseJson(yield* stored.text));
+        if (map) return { key, map } satisfies FoundSourceMap;
+        yield* Effect.logWarning("Stored mobile source map could not be decoded", { key });
         return undefined;
       }),
     {
@@ -145,16 +141,14 @@ const makeSourceMaps = Effect.gen(function* () {
     },
   );
   return SourceMaps.of({
-    find: (keys) =>
-      keys.length === 0
-        ? Effect.undefined
-        : Cache.get(cache, keys.join("|")).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("Mobile source map lookup failed", { key: error.key }).pipe(
-                Effect.as(undefined),
-              ),
-            ),
+    find: (key) =>
+      Cache.get(cache, key).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Mobile source map lookup failed", { key: error.key }).pipe(
+            Effect.as(undefined),
           ),
+        ),
+      ),
   });
 });
 
@@ -219,9 +213,10 @@ const make = Effect.gen(function* () {
     if (exceptions.length === 0) return undefined;
     let symbolicated = 0;
     for (const exception of exceptions) {
+      const key = bundleSourceMapKey(exception.identity);
       const outcome = applySymbolication(
         exception,
-        yield* sourceMaps.find(sourceMapKeys(exception.identity)),
+        key === undefined ? undefined : yield* sourceMaps.find(key),
       );
       if (outcome.status === "symbolicated") symbolicated += 1;
     }

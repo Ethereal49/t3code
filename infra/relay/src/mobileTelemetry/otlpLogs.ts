@@ -27,19 +27,21 @@ export const sourceMapKey = (platform: MobilePlatform, kind: SourceMapKind, id: 
   `${platform}/${kind}/${id}.map`;
 
 /**
- * Keys that may hold the map for a bundle, most specific first: the update's
- * own map, then the map of the binary's embedded bundle. Observe reports no
- * update id for an embedded launch, so those only match the build map.
+ * The key of the map for the bundle that threw. Observe reports an update id
+ * only for an OTA launch, so its map is the update's; without one the app ran
+ * the binary's embedded bundle, whose map is the build's. The build map never
+ * stands in for a missing OTA map: its offsets belong to a different bundle.
  */
-export function sourceMapKeys(identity: BundleIdentity): ReadonlyArray<string> {
-  const keys: Array<string> = [];
-  if (identity.updateId !== undefined && BUNDLE_ID_PATTERN.test(identity.updateId)) {
-    keys.push(sourceMapKey(identity.platform, "ota", identity.updateId));
+export function bundleSourceMapKey(identity: BundleIdentity): string | undefined {
+  if (identity.updateId !== undefined) {
+    return BUNDLE_ID_PATTERN.test(identity.updateId)
+      ? sourceMapKey(identity.platform, "ota", identity.updateId)
+      : undefined;
   }
   if (identity.easBuildId !== undefined && BUNDLE_ID_PATTERN.test(identity.easBuildId)) {
-    keys.push(sourceMapKey(identity.platform, "build", identity.easBuildId));
+    return sourceMapKey(identity.platform, "build", identity.easBuildId);
   }
-  return keys;
+  return undefined;
 }
 
 export interface JsException {

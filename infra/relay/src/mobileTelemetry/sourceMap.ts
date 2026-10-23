@@ -14,6 +14,12 @@ for (let index = 0; index < BASE64.length; index += 1) {
 }
 const COMMA = 44;
 const SEMICOLON = 59;
+/**
+ * The arrays below cost 16 bytes per possible segment, sized before any is
+ * read. A real map under the 16 MiB size cap has about 2.2 million segments;
+ * this keeps a malformed one well inside a Worker isolate's 128 MB.
+ */
+const MAX_SEGMENTS = 3_000_000;
 
 export interface CompactSourceMap {
   readonly sources: ReadonlyArray<string>;
@@ -60,6 +66,8 @@ export function decodeSourceMap(raw: unknown): CompactSourceMap | undefined {
       lineCount += 1;
     }
   }
+
+  if (capacity > MAX_SEGMENTS) return undefined;
 
   const lineStarts = new Int32Array(lineCount + 1);
   const generatedColumns = new Int32Array(capacity);

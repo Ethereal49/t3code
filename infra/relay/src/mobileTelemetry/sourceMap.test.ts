@@ -76,6 +76,11 @@ describe("decodeSourceMap", () => {
     expect(decodeSourceMap({ version: 3, sources: ["a.js"], mappings: "AA!A" })).toBeUndefined();
     expect(decodeSourceMap({ version: 3, sources: ["a.js"], mappings: "AAA" })).toBeUndefined();
   });
+
+  it("rejects maps with more segments than a Worker can hold, before decoding them", () => {
+    const separators = { version: 3, sources: ["a.js"], mappings: ";".repeat(3_000_000) };
+    expect(decodeSourceMap(separators)).toBeUndefined();
+  });
 });
 
 describe("symbolicateStack", () => {
