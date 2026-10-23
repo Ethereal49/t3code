@@ -9,6 +9,7 @@ import {
   normalizeSearchQuery,
   rankMessageMatches,
   splitSearchText,
+  THREAD_SEARCH_PICK_MAX_LENGTH,
 } from "@t3tools/shared/searchRank";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -422,7 +423,7 @@ export function CommandPalette(props: {
           threadId: thread.id,
           visitedAt: thread.updatedAt,
           opened: true,
-          searchQuery: query,
+          searchQuery: query.trim().slice(0, THREAD_SEARCH_PICK_MAX_LENGTH),
         },
       });
     }

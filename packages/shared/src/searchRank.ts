@@ -323,7 +323,8 @@ export const SEARCH_RECENCY_HALF_LIFE_MS = 14 * DAY_MS;
  */
 export const THREAD_OPEN_DEDUPE_MS = 10 * 60 * 1000;
 const THREAD_SEARCH_PICK_LIMIT = 3;
-const THREAD_SEARCH_PICK_MAX_LENGTH = 32;
+/** Picked queries are stored this long; clients send no more. */
+export const THREAD_SEARCH_PICK_MAX_LENGTH = 32;
 
 function decay(ageMs: number): number {
   return 2 ** (-Math.max(0, ageMs) / SEARCH_RECENCY_HALF_LIFE_MS);

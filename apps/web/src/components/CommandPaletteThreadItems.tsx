@@ -1,6 +1,10 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
-import { normalizeSearchQuery, rankMessageMatches } from "@t3tools/shared/searchRank";
+import {
+  normalizeSearchQuery,
+  rankMessageMatches,
+  THREAD_SEARCH_PICK_MAX_LENGTH,
+} from "@t3tools/shared/searchRank";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
@@ -141,7 +145,7 @@ export function useCommandPaletteThreadItems(input: {
             threadId: thread.id,
             visitedAt: thread.updatedAt,
             opened: true,
-            searchQuery: threadSearchQuery,
+            searchQuery: threadSearchQuery.trim().slice(0, THREAD_SEARCH_PICK_MAX_LENGTH),
           },
         });
       }
