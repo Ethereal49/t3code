@@ -210,14 +210,15 @@ interface TokenMatch extends SearchRange {
  * characters only match at a word start ("del" should not find "model"). With
  * `typos`, a three-character token may swap a pair and a longer one may carry
  * one typo in a word prefix that keeps its first letter. Numbers never match
- * with a typo: 22889 is not pull request 22189. With `initials`, the token may
- * also be initials or word-start runs (see `matchInitials`).
+ * with a typo: 22889 is not pull request 22189. In a `name`, the token may also
+ * be whole words typed together (see `matchJoinedWords`), and with typos also
+ * initials or word-start runs (see `matchInitials`).
  */
 function matchToken(
   field: SearchField,
   token: string,
   typos: boolean,
-  initials: boolean,
+  name: boolean,
 ): TokenMatch | null {
   let best: TokenMatch | null = null;
   const ownBoundary = !ALPHANUMERIC.test(token[0]!) && !SYMBOL.test(token[0]!);
@@ -238,6 +239,12 @@ function matchToken(
     } else if (token.length >= 4 && best === null) {
       best = { score: MID_WORD, start: index, end: index + token.length };
     }
+  }
+  // Joined words are exact, so they count without the typo pass: a strong
+  // match elsewhere must not hide "VS Code" for "vscode".
+  if (best === null && name) {
+    const joined = matchJoinedWords(field, token);
+    if (joined) return joined;
   }
   if ((best !== null && best.score > MID_WORD) || !typos || token.length < 3) return best;
   // Numbers skip typos (22889 is not 22189) but keep initials: "pnpm12" is "pnpm 12".
@@ -267,9 +274,7 @@ function matchToken(
       }
     }
   }
-  return (
-    best ?? (initials ? (matchJoinedWords(field, token) ?? matchInitials(field, token)) : null)
-  );
+  return best ?? (typos && name ? matchInitials(field, token) : null);
 }
 
 /**
@@ -424,8 +429,8 @@ function matchSearchFields(
     for (const { field, weight, wholeWords, keyword } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
       const typos = (options?.typos ?? false) && !keyword;
-      // Initials only count in the name.
-      const match = matchToken(field, token, typos, typos && field === primary);
+      // Joined words and initials only count in the name.
+      const match = matchToken(field, token, typos, field === primary);
       if (match === null || match.score < (wholeWords ? WHOLE_WORD : keyword ? 0.7 : 0)) continue;
       if (field === primary) bestPrimary = match;
       if (match.score >= 0.7) atWordStart = true;
@@ -485,7 +490,12 @@ let accentedLettersCache: Map<string, string> | null = null;
 function accentedLetters(): Map<string, string> {
   if (accentedLettersCache) return accentedLettersCache;
   accentedLettersCache = new Map();
-  for (let code = 0xc0; code <= 0x24f; code++) {
+  // Latin-1 Supplement, Extended-A and -B, and Extended Additional ("ế").
+  const codes = [
+    ...Array.from({ length: 0x24f - 0xc0 + 1 }, (_, offset) => 0xc0 + offset),
+    ...Array.from({ length: 0x1eff - 0x1e00 + 1 }, (_, offset) => 0x1e00 + offset),
+  ];
+  for (const code of codes) {
     const character = String.fromCharCode(code);
     const letter = foldCharacter(character);
     if (/^[a-z]$/.test(letter)) {
@@ -542,6 +552,55 @@ export interface MessageMatch {
  * accents are ignored, as in the server's index. Tokens too short for the
  * index ("12" in "pnpm 12") are the caller's to check.
  */
+// Accents written as separate combining marks ("e" + "\u0301").
+const HAS_MARK = /\p{M}/u;
+
+/** `text` lowercased without changing its length, so offsets stay valid ("İ" grows). */
+function lowerCaseInPlace(text: string): string {
+  const lower = text.toLowerCase();
+  if (lower.length === text.length) return lower;
+  return Array.from(text, (character) => {
+    const folded = character.toLowerCase();
+    return folded.length === character.length ? folded : character;
+  }).join("");
+}
+
+interface FoldedMessage {
+  readonly text: string;
+  sourceAt(index: number): number;
+  startsWord(index: number): boolean;
+  endsWord(end: number): boolean;
+}
+
+/**
+ * A message with case and accents folded, for matches the plain search
+ * missed. Native normalization keeps one character per source character for
+ * most text, so it folds a message of any length cheaply and word starts come
+ * from the source. Text it would shift (decomposed accents, ligatures) is
+ * folded per character instead, which is slow, so only its start is read.
+ */
+function foldMessage(text: string): FoldedMessage {
+  const native = text.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
+  if (native.length === text.length) {
+    return {
+      text: native,
+      sourceAt: (index) => index,
+      startsWord: (index) => startsWordAt(text, index),
+      endsWord: (end) => endsWordAt(text, end),
+    };
+  }
+  const field = foldSearchField(text.slice(0, 20_000));
+  return {
+    text: field.text,
+    sourceAt: (index) => field.sourceIndex?.[index] ?? index,
+    startsWord: (index) => field.wordStarts[index] === 1,
+    endsWord: (end) =>
+      end === field.text.length ||
+      field.wordStarts[end] === 1 ||
+      !ALPHANUMERIC.test(field.text[end]!),
+  };
+}
+
 interface PreparedMessageQuery {
   readonly query: string;
   readonly tooShort: ReadonlyArray<string>;
@@ -574,8 +633,8 @@ function prepareMessageQuery(query: string): PreparedMessageQuery {
 }
 
 export function scoreMessageMatch(text: string, query: string): MessageMatch | null {
-  const lowerText = text.toLowerCase();
-  let folded: SearchField | null = null;
+  const lowerText = lowerCaseInPlace(text);
+  let folded: FoldedMessage | null = null;
   let quality = 1;
   let offset = -1;
   const prepared = prepareMessageQuery(query);
@@ -600,26 +659,18 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
       if (wordStart === -1) wordStart = index;
       if (endsWordAt(text, index + token.length)) wholeWord = index;
     }
-    if (first === -1 || (wordStart === -1 && accents?.test(text))) {
-      // Folding is per character, so bound it for very long messages.
-      folded ??= foldSearchField(text.slice(0, 20_000));
+    if (first === -1 || (wordStart === -1 && (accents?.test(text) || HAS_MARK.test(text)))) {
+      folded ??= foldMessage(text);
       for (
         let index = folded.text.indexOf(foldedToken);
         index !== -1 && wholeWord === -1;
         index = folded.text.indexOf(foldedToken, index + 1)
       ) {
-        const source = folded.sourceIndex?.[index] ?? index;
+        const source = folded.sourceAt(index);
         if (first === -1) first = source;
-        if (!folded.wordStarts[index]) continue;
+        if (!folded.startsWord(index)) continue;
         if (wordStart === -1) wordStart = source;
-        const end = index + foldedToken.length;
-        if (
-          end === folded.text.length ||
-          folded.wordStarts[end] ||
-          !ALPHANUMERIC.test(folded.text[end]!)
-        ) {
-          wholeWord = source;
-        }
+        if (folded.endsWord(index + foldedToken.length)) wholeWord = source;
       }
     }
     if (wordStart === -1 && short) return null;
@@ -983,7 +1034,7 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
  * Orders message matches from the server like title matches: matches where
  * every query word starts a word first, then threads picked for the query,
  * then by use. `rank` is the match's position in its own environment's
- * results, which stand in for text relevance, so environments merge fairly.
+ * results (best match, then newest), so environments merge fairly.
  */
 export function rankMessageMatches<
   T extends { readonly rank: number; readonly midWord?: boolean | undefined },

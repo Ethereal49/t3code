@@ -2,8 +2,10 @@ import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
   claimThreadOpen,
+  nextShownOrder,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
+  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
@@ -421,25 +423,32 @@ export function CommandPalette(props: {
     selectThreadRoute,
     threads,
   ]);
-  const results = useMemo(() => {
+  const rankedMessageKeys = useMemo(() => {
     const subjectByKey = new Map(
       items.flatMap((item) => (item.threadSearch ? [[item.key, item.threadSearch] as const] : [])),
     );
     const keyOf = (match: EnvironmentThreadSearchMatch) =>
       scopedThreadKey(match.environmentId, match.threadId);
-    const messageMatchKeys = rankMessageMatches(
+    return rankMessageMatches(
       search.matches,
       (match) => subjectByKey.get(keyOf(match)),
       foldSearchQuery(query),
       now,
     ).map(keyOf);
+  }, [items, now, query, search.matches]);
+  // Rows already shown keep their places when a slower environment answers.
+  const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
+  const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys);
+  if (messageOrder !== shownOrder) setShownOrder(messageOrder);
+  const messageMatchKeys = messageOrder.keys;
+  const results = useMemo(() => {
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
     // Recent threads leave out the open one, which would always lead them.
     const activeKey = activeThread
       ? scopedThreadKey(activeThread.environmentId, activeThread.id)
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
-  }, [activeThread, items, now, query, search.matches]);
+  }, [activeThread, items, messageMatchKeys, now, query]);
   // The pick is an open with its query, so the thread view skips its own.
   const runResult = (item: CommandPaletteResult) => {
     const thread =

@@ -1,7 +1,9 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   claimThreadOpen,
+  nextShownOrder,
   type EnvironmentThreadSearchMatch,
+  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { foldSearchQuery, rankMessageMatches, pickedQuery } from "@t3tools/shared/paletteSearch";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -166,7 +168,7 @@ export function useCommandPaletteThreadItems(input: {
   const itemByValue = new Map(threadItems.map((item) => [item.value, item]));
   const itemForMatch = (match: EnvironmentThreadSearchMatch) =>
     itemByValue.get(`thread:${match.environmentId}:${match.threadId}`);
-  const threadMessageItems = rankMessageMatches(
+  const rankedMessageItems = rankMessageMatches(
     messageSearch.matches,
     (match) => itemForMatch(match)?.threadSearch,
     foldSearchQuery(threadSearchQuery),
@@ -191,6 +193,17 @@ export function useCommandPaletteThreadItems(input: {
       },
     ];
   });
+
+  // Rows already shown keep their places when a slower environment answers.
+  const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
+  const order = nextShownOrder(
+    shownOrder,
+    messageSearch.query,
+    rankedMessageItems.map((item) => item.value),
+  );
+  if (order !== shownOrder) setShownOrder(order);
+  const messageItemByValue = new Map(rankedMessageItems.map((item) => [item.value, item]));
+  const threadMessageItems = order.keys.flatMap((value) => messageItemByValue.get(value) ?? []);
 
   return { threadItems, threadMessageItems, now, isSearchPending: messageSearch.isPending };
 }

@@ -42,7 +42,7 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
   readonly environmentId: EnvironmentId;
-  /** Position in its environment's results, which the server orders by relevance. */
+  /** Position in its environment's results, which the server orders by match and age. */
   readonly rank: number;
 }
 
@@ -137,10 +137,14 @@ export function threadSearchSubject(
   projectTitle: string | null | undefined,
   environmentLabel?: string | null,
 ): ThreadSearchSubject {
-  // What the user wrote, not agent wakes or task notices in the user role.
-  const activityAt = thread.latestUserAuthoredMessageAt
-    ? Date.parse(thread.latestUserAuthoredMessageAt)
-    : getThreadSortTimestamp(thread, "updated_at");
+  // What the user wrote, not agent wakes or task notices in the user role. A
+  // thread the user never wrote in counts from its creation; an older server
+  // omits the field, so the latest user-role message stands in.
+  const authored = thread.latestUserAuthoredMessageAt;
+  const activityAt =
+    authored === undefined
+      ? getThreadSortTimestamp(thread, "updated_at")
+      : Date.parse(authored ?? thread.createdAt);
   const localOpenedAt = localThreadOpens.get(`${thread.environmentId}:${thread.id}`) ?? 0;
   return {
     id: thread.id,
@@ -157,6 +161,34 @@ export function threadSearchSubject(
         ? { score: 1, picks: [], ...thread.opens, openedAt: localOpenedAt }
         : (thread.opens ?? null),
   };
+}
+
+/** Message result keys in the order a search box last showed them for `query`. */
+export interface ShownOrder {
+  readonly query: string;
+  readonly keys: ReadonlyArray<string>;
+}
+
+/**
+ * The order to show message results in: rows already shown for this query
+ * keep their places and new ones go below them, so a slower environment's
+ * answer never moves a row under the pointer or the keyboard highlight.
+ * Returns `previous` when nothing changed, so it can sit in React state.
+ */
+export function nextShownOrder(
+  previous: ShownOrder | null,
+  query: string,
+  ranked: ReadonlyArray<string>,
+): ShownOrder {
+  if (previous?.query !== query) return { query, keys: ranked };
+  const listed = new Set(ranked);
+  const kept = previous.keys.filter((key) => listed.has(key));
+  const shown = new Set(kept);
+  const keys = [...kept, ...ranked.filter((key) => !shown.has(key))];
+  const unchanged =
+    keys.length === previous.keys.length &&
+    keys.every((key, index) => key === previous.keys[index]);
+  return unchanged ? previous : { query, keys };
 }
 
 export interface SettledThreadSearch {

@@ -55,7 +55,6 @@ const SearchRow = Schema.Struct({
   source: OrchestrationThreadSearchSource,
   text: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
-  score: Schema.Number,
 });
 
 const SNIPPET_LENGTH = 240;
@@ -189,8 +188,7 @@ export const messageHitsQuery = (
             eligible.project_id AS "projectId",
             messages.role AS source,
             json_extract(messages.payload_json, '$.text') AS text,
-            messages.created_at AS "messageCreatedAt",
-            0 AS score
+            messages.created_at AS "messageCreatedAt"
           FROM orchestration_v2_projection_messages AS messages
           INNER JOIN eligible ON eligible.thread_id = messages.thread_id
           WHERE ${indexedMessageCondition(sql)}
@@ -206,8 +204,7 @@ export const messageHitsQuery = (
             eligible.project_id AS "projectId",
             messages.role AS source,
             json_extract(messages.payload_json, '$.text') AS text,
-            messages.created_at AS "messageCreatedAt",
-            bm25(orchestration_v2_message_search) AS score
+            messages.created_at AS "messageCreatedAt"
           FROM orchestration_v2_message_search
           INNER JOIN orchestration_v2_projection_messages AS messages
             ON messages.rowid = orchestration_v2_message_search.rowid
@@ -312,9 +309,10 @@ export const make = Effect.gen(function* () {
   const searchMessages = Effect.fn("ThreadSearch.searchMessages")(function* (
     input: OrchestrationSearchThreadsInput & { readonly projectId: ProjectId | null },
   ) {
-    // One message per thread: one where every word starts a word, then what the
-    // user wrote, since that is what they remember asking, then the best text
-    // match. Rows arrive newest first, so ties keep the newest.
+    // One message per thread: the best word match, then what the user wrote,
+    // since that is what they remember asking. Rows arrive newest first, so
+    // ties keep the newest. Threads order by that match, then by its age;
+    // text relevance (bm25) would cost a pass over every hit in history.
     type Hit = {
       readonly row: typeof SearchRow.Type;
       readonly quality: number;
@@ -323,8 +321,7 @@ export const make = Effect.gen(function* () {
     };
     const compareHits = (left: Hit, right: Hit) =>
       right.quality - left.quality ||
-      Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
-      left.row.score - right.row.score;
+      Number(left.row.source !== "user") - Number(right.row.source !== "user");
     const best = new Map<ThreadId, Hit>();
     // Returns how many rows matched as words.
     const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
@@ -364,7 +361,8 @@ export const make = Effect.gen(function* () {
       }),
     );
     const ranked = [...best.values()].sort(
-      (left, right) => right.quality - left.quality || left.row.score - right.row.score,
+      (left, right) =>
+        right.quality - left.quality || right.row.messageRowid - left.row.messageRowid,
     );
     return {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, midWord, offset }) => ({
@@ -399,9 +397,9 @@ export const make = Effect.gen(function* () {
           branch: row.thread.branch,
           projectTitle: row.projectTitle,
           pullRequests: threadSearchPullRequests(row.thread),
-          // Like the clients: the latest user message, else the last update.
+          // Like the clients: what the user last wrote, else when the thread began.
           activityAt: Date.parse(
-            row.latestUserMessageAt ?? DateTime.formatIso(row.thread.updatedAt),
+            row.latestUserMessageAt ?? DateTime.formatIso(row.thread.createdAt),
           ),
           opens: row.thread.opens ?? null,
         },

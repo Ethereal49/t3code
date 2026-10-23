@@ -219,6 +219,13 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("fixuibug", threads)).toEqual(["Fix UI bug in sidebar"]);
     expect(rankTitles("lint", threads)).toEqual([]);
     expect(rankTitles("strasse", [thread("Straße bauen")])).toEqual(["Straße bauen"]);
+    // A strong match elsewhere does not hide joined words.
+    expect(
+      rankTitles("vscode", [
+        thread("VS Code remote support"),
+        thread("Old work", { branch: "vscode", activityAt: NOW - 400 * DAY }),
+      ]),
+    ).toContain("VS Code remote support");
   });
 
   it("stores picked queries without splitting an emoji", () => {
@@ -526,5 +533,17 @@ describe("scoreMessageMatch", () => {
       offset: 16,
     });
     expect(scoreMessageMatch("明天部署到生产环境", "部署")).toMatchObject({ offset: 2 });
+    // Folding reaches past any length, and covers Vietnamese and combining accents.
+    const long = `${"plain ".repeat(4000)}Résumé indexing`;
+    expect(scoreMessageMatch(long, "res")).toMatchObject({ offset: 24_000 });
+    expect(scoreMessageMatch("Properties: tiếng Việt support", "tie")).toMatchObject({
+      offset: 12,
+    });
+    expect(scoreMessageMatch("Properties: tie\u0301ng support", "tie")).toMatchObject({
+      offset: 12,
+    });
+    // A letter that grows when lowercased does not shift later offsets.
+    expect(scoreMessageMatch("İ Enable fts and model", "fts")).toMatchObject({ offset: 9 });
+    expect(scoreMessageMatch("İ Enable fts and model", "model")?.midWord).toBe(false);
   });
 });

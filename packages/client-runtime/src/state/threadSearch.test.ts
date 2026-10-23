@@ -12,6 +12,7 @@ import {
   claimThreadOpen,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
+  nextShownOrder,
   threadSearchMatchKey,
   threadSearchSubject,
   visibleThreadSearch,
@@ -147,10 +148,43 @@ it("ranks recent threads by this client's own latest open", () => {
   ).toEqual({ openedAt: 6_000, score: 1, picks: [] });
 });
 
+it("counts recency from what the user wrote, else from when the thread began", () => {
+  const thread = {
+    environmentId: envA,
+    id: ThreadId.make("thread-agent"),
+    title: "Launched by an agent",
+    branch: null,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-20T00:00:00.000Z",
+    latestUserMessageAt: "2026-10-20T00:00:00.000Z",
+    opens: null,
+  };
+  expect(
+    threadSearchSubject({ ...thread, latestUserAuthoredMessageAt: null }, null).activityAt,
+  ).toBe(Date.parse("2026-10-01T00:00:00.000Z"));
+  expect(
+    threadSearchSubject(
+      { ...thread, latestUserAuthoredMessageAt: "2026-10-05T00:00:00.000Z" },
+      null,
+    ).activityAt,
+  ).toBe(Date.parse("2026-10-05T00:00:00.000Z"));
+  // An older server omits the field.
+  expect(threadSearchSubject(thread, null).activityAt).toBe(Date.parse("2026-10-20T00:00:00.000Z"));
+});
+
 it("sends one open per thread every ten minutes by this client's clock", () => {
   const minute = 60_000;
   expect(claimThreadOpen(envA, "thread-open", 0)).toBe(true);
   expect(claimThreadOpen(envA, "thread-open", 9 * minute)).toBe(false);
   expect(claimThreadOpen(envB, "thread-open", 9 * minute)).toBe(true);
   expect(claimThreadOpen(envA, "thread-open", 10 * minute)).toBe(true);
+});
+
+it("keeps shown message rows in place when a slower environment answers", () => {
+  const first = nextShownOrder(null, "needle", ["a1", "a2"]);
+  const second = nextShownOrder(first, "needle", ["b1", "a1", "a2"]);
+  expect(second.keys).toEqual(["a1", "a2", "b1"]);
+  expect(nextShownOrder(second, "needle", ["b1", "a1", "a2"])).toBe(second);
+  // A new query starts from its own ranking.
+  expect(nextShownOrder(second, "needles", ["b1", "a1"]).keys).toEqual(["b1", "a1"]);
 });
