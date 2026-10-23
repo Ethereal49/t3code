@@ -91,6 +91,9 @@ export const RelayObservability = Effect.gen(function* () {
   // Mobile JavaScript source maps, read by the relay to symbolicate stacks.
   const mobileSourceMaps = yield* Cloudflare.R2.Bucket("MobileSourceMapsBucket", {
     name: mobileSourceMapsBucketName(stage),
+    // R2 refuses to delete a non-empty bucket, which would leave every
+    // destroyed preview or personal stage half torn down.
+    forceDestroy: stage !== "prod",
   });
 
   yield* Axiom.View("RelayRecentSpansView", {
