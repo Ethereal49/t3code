@@ -22,7 +22,11 @@ import {
   CommandShortcut,
 } from "./ui/command";
 import { getVirtualizedScrollFadeClassName } from "./ui/scroll-area";
-import { HighlightedSearchText, ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
+import {
+  HighlightedSearchText,
+  SearchMatchHintLine,
+  ThreadSearchMatchExcerpt,
+} from "./ThreadSearchMatch";
 
 interface CommandPaletteResultsProps {
   emptyStateMessage?: string;
@@ -186,8 +190,9 @@ function DisabledCommandPaletteResultRow(props: {
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
-          ) : null}
-          {props.item.description ? (
+          ) : props.item.matchHint ? (
+            <SearchMatchHintLine hint={props.item.matchHint} />
+          ) : props.item.description ? (
             <span className="min-w-0 text-muted-foreground/70 text-xs">
               {props.item.description}
             </span>
@@ -236,8 +241,9 @@ function CommandPaletteResultRow(props: {
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
-          ) : null}
-          {props.item.description ? (
+          ) : props.item.matchHint ? (
+            <SearchMatchHintLine hint={props.item.matchHint} />
+          ) : props.item.description ? (
             <span className="min-w-0 text-muted-foreground/70 text-xs">
               {props.item.description}
             </span>

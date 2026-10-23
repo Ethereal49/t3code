@@ -15,6 +15,8 @@ const LOWERCASE = /\p{Ll}/u;
 const UPPERCASE = /\p{Lu}/u;
 const DIGIT = /\p{N}/u;
 const COMBINING_MARKS = /\p{M}/gu;
+// Emoji and other symbols can be searched for, so they start words too.
+const SYMBOL = /\p{So}/u;
 const APOSTROPHE = /['’]/;
 
 interface SearchField {
@@ -77,7 +79,7 @@ function foldSearchField(source: string): SearchField {
     // "Julius’s": a possessive or contraction does not start a word.
     const afterApostrophe = APOSTROPHE.test(previous) && ALPHANUMERIC.test(beforePrevious);
     const startsWord =
-      ALPHANUMERIC.test(character) &&
+      (ALPHANUMERIC.test(character) || SYMBOL.test(character)) &&
       !afterApostrophe &&
       (previous === "" ||
         !ALPHANUMERIC.test(previous) ||
@@ -105,9 +107,12 @@ function foldSearchField(source: string): SearchField {
 
 function prepareSearchField(source: string): SearchField {
   const cached = fieldCache.get(source);
-  if (cached) return cached;
-  const field = foldSearchField(source);
-  if (fieldCache.size >= FIELD_CACHE_LIMIT) fieldCache.clear();
+  // Re-inserting keeps recently read fields at the back, so eviction drops the oldest.
+  fieldCache.delete(source);
+  const field = cached ?? foldSearchField(source);
+  if (fieldCache.size >= FIELD_CACHE_LIMIT) {
+    fieldCache.delete(fieldCache.keys().next().value!);
+  }
   fieldCache.set(source, field);
   return field;
 }
@@ -563,6 +568,55 @@ export interface ThreadSearchMatch {
   /** Every token matched at a word start; see `rankSearchGroups`. */
   readonly strong: boolean;
   readonly titleRanges: ReadonlyArray<SearchRange>;
+  /** Why the thread matched when its title shows no match, for the result row. */
+  readonly hint?: SearchMatchHint;
+}
+
+export interface SearchMatchHint {
+  readonly label: string;
+  readonly text: string;
+  readonly ranges: ReadonlyArray<SearchRange>;
+}
+
+const PULL_REQUEST_WORDS = new Set(["pr", "prs", "pull", "pulls", "request", "requests"]);
+
+/**
+ * "pr 22889", "pr22889", and "pull request 22889" name a linked pull request:
+ * once a token is one of its numbers, the words around it need not match.
+ */
+function withoutPullRequestWords(normalizedQuery: string, thread: ThreadSearchSubject): string {
+  const numbers = new Set(
+    (thread.pullRequests ?? []).map((pullRequest) => `${pullRequest.number}`),
+  );
+  if (numbers.size === 0) return normalizedQuery;
+  const tokens = normalizedQuery
+    .split(" ")
+    .map((token) => token.replace(/^(?:#|pr|pull)(\d+)$/, "$1"));
+  if (!tokens.some((token) => numbers.has(token))) return normalizedQuery;
+  return tokens.filter((token) => !PULL_REQUEST_WORDS.has(token)).join(" ");
+}
+
+/** The first non-title field that holds the whole query, to explain the match. */
+function matchHint(
+  normalizedQuery: string,
+  thread: ThreadSearchSubject,
+  typos: boolean,
+): SearchMatchHint | undefined {
+  const candidates: Array<{ readonly label: string; readonly text: string | null | undefined }> = [
+    ...(thread.pullRequests ?? []).map((pullRequest) => ({
+      label: "PR",
+      text: `#${pullRequest.number}${pullRequest.title ? ` ${pullRequest.title}` : ""}`,
+    })),
+    { label: "Branch", text: thread.branch },
+    { label: "Project", text: thread.projectTitle },
+    { label: "Environment", text: thread.environmentLabel },
+  ];
+  for (const { label, text } of candidates) {
+    if (!text) continue;
+    const match = matchSearchFields(normalizedQuery, [{ value: text, weight: 1 }], { typos });
+    if (match) return { label, text, ranges: match.primaryRanges };
+  }
+  return undefined;
 }
 
 /**
@@ -585,19 +639,36 @@ export function scoreThreadSearch(
   if (thread.projectTitle) fields.push({ value: thread.projectTitle, weight: 0.45 });
   if (thread.environmentLabel) fields.push({ value: thread.environmentLabel, weight: 0.45 });
   const boost = pickBoost(thread, normalizedQuery, now);
+  const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#/, "");
+  const fieldMatch = matchSearchFields(fieldQuery, fields, options);
+  const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
+  const pickOnly =
+    !fieldMatch && !referenceMatch && boost > 0 && normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
   const match =
-    matchSearchFields(normalizedQuery.replace(/^#/, ""), fields, options) ??
-    matchReference(normalizedQuery, thread) ??
-    (boost > 0 && normalizedQuery.length >= PICK_ONLY_MIN_LENGTH
-      ? { quality: 0.5, strong: false, primaryRanges: [] }
-      : null);
+    fieldMatch ??
+    referenceMatch ??
+    (pickOnly ? { quality: 0.5, strong: false, primaryRanges: [] } : null);
   if (match === null) return null;
+  const hint =
+    match.primaryRanges.length > 0
+      ? undefined
+      : referenceMatch
+        ? { label: "ID or link", text: normalizedQuery, ranges: [] }
+        : pickOnly
+          ? { label: "Picked before for", text: normalizedQuery, ranges: [] }
+          : matchHint(fieldQuery, thread, options?.typos ?? false);
   return {
     score: match.quality * (threadUsageBoost(thread, now) + boost),
     quality: match.quality,
     strong: match.strong,
     titleRanges: match.primaryRanges,
+    ...(hint ? { hint } : {}),
   };
+}
+
+/** When the user last used a thread: their last message or their last open. */
+export function threadRecentUse(thread: ThreadSearchSubject): number {
+  return Math.max(thread.activityAt ?? 0, thread.opens?.openedAt ?? 0);
 }
 
 /**

@@ -384,6 +384,29 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
+  it("forgives a typo in a setting name when nothing matches exactly", () => {
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [],
+      query: "keybindngs",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+      settingsSearchItems: [
+        {
+          kind: "action",
+          value: "setting:keybindings",
+          title: "Keybindings",
+          searchTerms: ["Keybindings", "General", "shortcuts"],
+          icon: null,
+          run: async () => undefined,
+        },
+      ],
+    });
+    expect(groups.flatMap((group) => group.items.map((item) => item.value))).toEqual([
+      "setting:keybindings",
+    ]);
+  });
+
   it("normalizes case independently of the host locale", () => {
     const toLocaleLowerCase = String.prototype.toLocaleLowerCase;
     const localeLowerCase = vi

@@ -6,6 +6,7 @@ import {
   rankSearchGroups,
   scoreSearchTerms,
   scoreThreadSearch,
+  type SearchMatchHint,
   type SearchRange,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
@@ -170,6 +171,8 @@ export interface CommandPaletteItem {
   readonly threadSearch?: ThreadSearchSubject;
   /** Title ranges the current query matched, for highlighting. */
   readonly titleRanges?: ReadonlyArray<SearchRange>;
+  /** Shown in place of the description when the match is not in the title. */
+  readonly matchHint?: SearchMatchHint;
   readonly icon: ReactNode;
   readonly disabled?: boolean;
   readonly titleLeadingContent?: ReactNode;
@@ -473,6 +476,7 @@ function rankPaletteItem(
   readonly quality: number;
   readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
+  readonly hint?: SearchMatchHint;
 } | null {
   if (item.threadSearch) {
     const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
@@ -561,7 +565,11 @@ export function filterCommandPaletteGroups(input: {
           Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false),
       )
       .map(({ item, match }) =>
-        match.ranges.length > 0 ? { ...item, titleRanges: match.ranges } : item,
+        match.ranges.length > 0
+          ? { ...item, titleRanges: match.ranges }
+          : match.hint
+            ? { ...item, matchHint: match.hint }
+            : item,
       );
     const limit =
       group.value === "threads-search"

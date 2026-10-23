@@ -131,6 +131,34 @@ describe("scoreThreadSearch", () => {
 });
 
 describe("scoreThreadSearch beyond Latin text and titles", () => {
+  it("says which field matched when the title does not, and reads pull request phrasing", () => {
+    const subject = thread("Trim model lists", {
+      branch: "t3/cleanup-payloads",
+      pullRequests: [{ number: 22889, title: "Smaller MCP payloads" }],
+    });
+    for (const query of ["pr 22889", "pr22889", "pull 22889", "pull request #22889"]) {
+      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW)?.hint, query).toEqual({
+        label: "PR",
+        text: "#22889 Smaller MCP payloads",
+        ranges: [{ start: 1, end: 6 }],
+      });
+    }
+    expect(scoreThreadSearch("cleanup", subject, NOW)?.hint).toEqual({
+      label: "Branch",
+      text: "t3/cleanup-payloads",
+      ranges: [{ start: 3, end: 10 }],
+    });
+    expect(scoreThreadSearch("trim", subject, NOW)?.hint).toBeUndefined();
+    // The words only drop out next to a linked number.
+    expect(scoreThreadSearch("pr 12345", subject, NOW)).toBeNull();
+  });
+
+  it("matches emoji in titles", () => {
+    expect(rankTitles("🚀", [thread("🚀 Launch checklist"), thread("Launch notes")])).toEqual([
+      "🚀 Launch checklist",
+    ]);
+  });
+
   it("treats each Chinese or Japanese character as a word start", () => {
     expect(scoreThreadSearch("搜索", thread("实现全文搜索"), NOW)).not.toBeNull();
     expect(scoreThreadSearch("検索", thread("新しい検索機能"), NOW)).not.toBeNull();

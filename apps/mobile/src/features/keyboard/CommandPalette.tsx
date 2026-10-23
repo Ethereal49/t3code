@@ -10,6 +10,7 @@ import {
   rankMessageMatches,
   splitSearchText,
   THREAD_SEARCH_PICK_MAX_LENGTH,
+  threadRecentUse,
 } from "@t3tools/shared/paletteSearch";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -153,6 +154,15 @@ function PaletteRow(props: {
             selected={props.selected}
             compact
           />
+        ) : props.item.matchHint ? (
+          <Text numberOfLines={1} className={cn("text-sm", mutedForegroundClassName)}>
+            {props.item.matchHint.label}:{" "}
+            {splitSearchText(props.item.matchHint.text, props.item.matchHint.ranges).map((part) => (
+              <Text key={part.start} className={cn("text-sm", part.highlighted && "font-t3-bold")}>
+                {part.text}
+              </Text>
+            ))}
+          </Text>
         ) : props.item.detail ? (
           <Text numberOfLines={1} className={cn("text-sm", mutedForegroundClassName)}>
             {props.item.detail}
@@ -362,11 +372,6 @@ export function CommandPalette(props: {
         (thread) =>
           thread.archivedAt === null && thread.lineage.relationshipToParent !== "subagent",
       )
-      .sort((left, right) =>
-        (right.latestUserMessageAt ?? right.updatedAt).localeCompare(
-          left.latestUserMessageAt ?? left.updatedAt,
-        ),
-      )
       .map((thread) => {
         const project = projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId));
         const environment =
@@ -385,6 +390,12 @@ export function CommandPalette(props: {
           run: () => selectThread(thread),
         };
       });
+    // Recent means used recently: written in or opened, whichever is later.
+    threadItems.sort(
+      (left, right) =>
+        (right.threadSearch ? threadRecentUse(right.threadSearch) : 0) -
+        (left.threadSearch ? threadRecentUse(left.threadSearch) : 0),
+    );
     return [...actions, ...projectItems, ...threadItems];
   }, [
     activeThread,

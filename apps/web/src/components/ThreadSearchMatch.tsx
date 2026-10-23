@@ -1,6 +1,7 @@
 import {
   findSearchTokenRanges,
   splitSearchText,
+  type SearchMatchHint,
   type SearchRange,
 } from "@t3tools/shared/paletteSearch";
 
@@ -15,6 +16,16 @@ export function HighlightedSearchText(props: { text: string; ranges: ReadonlyArr
     ) : (
       part.text
     ),
+  );
+}
+
+/** Why a row matched when its title does not show it: the field and its match. */
+export function SearchMatchHintLine(props: { hint: SearchMatchHint }) {
+  return (
+    <span className="truncate text-xs text-muted-foreground/85">
+      <span className="text-muted-foreground/70">{props.hint.label}:</span>{" "}
+      <HighlightedSearchText text={props.hint.text} ranges={props.hint.ranges} />
+    </span>
   );
 }
 
