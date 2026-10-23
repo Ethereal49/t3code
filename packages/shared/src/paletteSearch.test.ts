@@ -644,6 +644,10 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
     expect(scoreMessageMatch("Upgrade pnpm 512 today", "pnpm 12")).toBeNull();
     expect(scoreMessageMatch("Upgrade to pnpm12 today", "pnpm 12")?.quality).toBe(1);
+    // A short word that only starts a longer one is a prefix match.
+    expect(scoreMessageMatch("Fix circle rendering", "fix ci")?.quality).toBe(0.8);
+    expect(scoreMessageMatch("Fix CI failures", "fix ci")?.quality).toBe(1);
+    expect(scoreMessageMatch("Upgrade pnpm 123 today", "pnpm 12")?.quality).toBe(0.8);
     expect(scoreMessageMatch("Rename the file to index.ts", ".ts")?.quality).toBe(1);
   });
 

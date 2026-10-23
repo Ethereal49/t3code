@@ -364,6 +364,68 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("counts a thread's hits at its best match only", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:best-hits");
+      yield* createProject(project);
+      const clarks = ThreadId.make("thread:clarks");
+      const larks = ThreadId.make("thread:lark-many");
+      yield* Effect.forEach(
+        [
+          thread(clarks, project),
+          message(clarks, "clarks-lark", "user", "Lark once", { minute: 3 }),
+          ...Array.from({ length: 31 }, (_, index) =>
+            message(clarks, `clarks-${index}`, "assistant", "Clark the plan", { minute: 3 }),
+          ),
+          thread(larks, project),
+          ...Array.from({ length: 8 }, (_, index) =>
+            message(larks, `lark-many-${index}`, "assistant", "Lark again", { minute: 3 }),
+          ),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "lark" });
+      assert.deepEqual(
+        matches.map((match) => [match.threadId, match.hits]),
+        [
+          [larks, 8],
+          [clarks, 1],
+        ],
+      );
+    }),
+  );
+
+  it.effect("recovers an older word after a backslash behind newer hits inside words", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:windows");
+      yield* createProject(project);
+      const windows = ThreadId.make("thread:windows-path");
+      const darwin = ThreadId.make("thread:darwin");
+      yield* Effect.forEach(
+        [
+          thread(windows, project),
+          message(windows, "windows-path", "user", "Inspect C:\\Windows\\Temp"),
+          thread(darwin, project),
+          ...Array.from({ length: 2000 }, (_, index) =>
+            message(darwin, `darwin-${index}`, "assistant", "on Darwin hosts"),
+          ),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "win" });
+      assert.deepEqual(
+        matches.map((match) => match.threadId),
+        [windows],
+      );
+    }),
+  );
+
   it.effect("finds an older word when one busy thread fills the newest hits", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -557,6 +619,13 @@ it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
           [midWord, "title"],
           [messageOnly, "user"],
         ],
+      );
+      // With one slot, an exact title keeps it.
+      assert.deepEqual(
+        (yield* search.searchThreads({ query: "auth", projectId: project, limit: 1 })).matches.map(
+          (match) => match.threadId,
+        ),
+        [wordStart],
       );
       // Exact matching finds nothing, so one typo is forgiven.
       assert.deepEqual(

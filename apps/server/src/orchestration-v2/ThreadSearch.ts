@@ -74,35 +74,17 @@ const WHOLE_WORD_THREAD_GOAL = 10;
 const MESSAGE_SCAN_LIMIT = 20_000;
 
 // What can come right before a word, for the index pass that finds words a
-// common fragment's newest hits missed. Indexed text starts with a space, so
-// a message's first word counts. camelCase joins ("enableIngest") are left to
-// the newest hits: the index ignores case.
+// common fragment's newest hits missed: whitespace and every ASCII
+// punctuation mark, as the shared word rule treats them. Indexed text starts
+// with a space, so a message's first word counts. camelCase joins
+// ("enableIngest") are left to the newest hits: the index ignores case.
 const WORD_BOUNDARIES = [
   " ",
   "\n",
   "\t",
-  "(",
-  ")",
-  "[",
-  "{",
-  "<",
-  "`",
-  '"',
-  "'",
-  "/",
-  "-",
-  "_",
-  ".",
-  ",",
-  ":",
-  ";",
-  "=",
-  "+",
-  "|",
-  "#",
-  "@",
-  "*",
-  ">",
+  ...Array.from({ length: 0x7e - 0x21 + 1 }, (_, offset) =>
+    String.fromCharCode(0x21 + offset),
+  ).filter((character) => !/[A-Za-z0-9]/.test(character)),
 ];
 
 /**
@@ -344,9 +326,11 @@ export const make = Effect.gen(function* () {
       Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
       newer(left, right);
     const best = new Map<ThreadId, Hit>();
-    // Matching messages per thread: a thread that keeps using the word ranks
-    // above a passing mention.
-    const hitCounts = new Map<ThreadId, number>();
+    // Matching messages per thread at its best quality: a thread that keeps
+    // using the word ranks above a passing mention, and weaker hits ("Trust"
+    // for "rust") never add to a whole word's count.
+    const hitCounts = new Map<ThreadId, { readonly quality: number; readonly count: number }>();
+    const hitCount = (threadId: ThreadId) => hitCounts.get(threadId)?.count ?? 1;
     // Returns how many rows matched as words.
     const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
       let words = 0;
@@ -354,7 +338,12 @@ export const make = Effect.gen(function* () {
         const match = scoreMessageMatch(row.text, input.query);
         if (match === null) continue;
         if (!match.midWord) words++;
-        hitCounts.set(row.threadId, (hitCounts.get(row.threadId) ?? 0) + 1);
+        const counted = hitCounts.get(row.threadId);
+        if (counted === undefined || match.quality > counted.quality) {
+          hitCounts.set(row.threadId, { quality: match.quality, count: 1 });
+        } else if (match.quality === counted.quality) {
+          hitCounts.set(row.threadId, { quality: match.quality, count: counted.count + 1 });
+        }
         const hit = { row, ...match };
         const current = best.get(row.threadId);
         if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
@@ -406,7 +395,7 @@ export const make = Effect.gen(function* () {
     );
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const relevance = (hit: Hit) =>
-      messageMatchWeight(hitCounts.get(hit.row.threadId) ?? 1) *
+      messageMatchWeight(hitCount(hit.row.threadId)) *
       (1 +
         2 **
           (-Math.max(0, now - Date.parse(hit.row.messageCreatedAt ?? "")) /
@@ -421,7 +410,7 @@ export const make = Effect.gen(function* () {
     );
     return {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, quality, offset }) => ({
-        hits: hitCounts.get(row.threadId) ?? 1,
+        hits: hitCount(row.threadId),
         threadId: row.threadId,
         projectId: row.projectId,
         source: row.source,
@@ -493,7 +482,7 @@ export const make = Effect.gen(function* () {
     }));
     // Titles come first, but a fifth of the slots stay for message matches,
     // as the palette keeps its "In messages" section.
-    const messageSlots = Math.min(messageHits.length, Math.ceil(limit / 5));
+    const messageSlots = Math.min(messageHits.length, Math.floor(limit / 5));
     return {
       matches: [...titleHits.slice(0, limit - messageSlots), ...messageHits].slice(0, limit),
     };

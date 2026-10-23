@@ -738,9 +738,22 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
   // Too short for the index, so the caller only checked them as substrings:
   // "on" must start a word, not sit inside "connection".
   for (const token of prepared.tooShort) {
-    let index = lowerText.indexOf(token);
-    while (index !== -1 && !startsWordAt(text, index)) index = lowerText.indexOf(token, index + 1);
-    if (index === -1) return null;
+    let wordStart = -1;
+    for (
+      let index = lowerText.indexOf(token);
+      index !== -1;
+      index = lowerText.indexOf(token, index + 1)
+    ) {
+      if (!startsWordAt(text, index)) continue;
+      if (endsWordAt(text, index + token.length)) {
+        wordStart = index;
+        break;
+      }
+      if (wordStart === -1) wordStart = index;
+    }
+    if (wordStart === -1) return null;
+    // "ci" in "circle" or "12" in "123" only starts the word.
+    if (!endsWordAt(text, wordStart + token.length)) quality = MESSAGE_PREFIX;
   }
   for (const { token, foldedToken, short, accents } of prepared.tokens) {
     let first = -1;
