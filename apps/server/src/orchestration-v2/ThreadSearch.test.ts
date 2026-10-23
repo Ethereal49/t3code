@@ -401,6 +401,32 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("matches messages as they read, with links as their text", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:heron");
+      const labeled = ThreadId.make("thread:heron-label");
+      const addressOnly = ThreadId.make("thread:heron-address");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(labeled, project),
+          message(labeled, "heron-label", "assistant", "See [the heron plan](https://x.dev/a) now"),
+          thread(addressOnly, project),
+          message(addressOnly, "heron-address", "user", "Read [this](https://heron.dev/b)"),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "heron" });
+      assert.deepEqual(
+        matches.map((match) => [match.threadId, match.snippet]),
+        [[labeled, "See the heron plan now"]],
+      );
+    }),
+  );
+
   it.effect("reads at most the newest 10,000 index hits, however many the filters drop", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

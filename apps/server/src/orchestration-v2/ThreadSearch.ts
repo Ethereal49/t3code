@@ -89,6 +89,10 @@ function buildMessageSearch(
   };
 }
 
+// A thread shows a link as its text, so in-thread find cannot reach a match
+// in the address; messages are matched as they read.
+const MARKDOWN_LINK = /!?\[([^\]\n]*)\]\([^)\s]*\)/g;
+
 // Result rows show one line, so the match must sit near the start to be seen.
 const SNIPPET_LEAD = 24;
 
@@ -286,6 +290,8 @@ export const make = Effect.gen(function* () {
     // would cost a pass over every hit in history.
     type Hit = {
       readonly row: typeof SearchRow.Type;
+      /** The message as it reads, links as their text. */
+      readonly text: string;
       readonly quality: number;
       readonly offset: number;
     };
@@ -313,9 +319,10 @@ export const make = Effect.gen(function* () {
     const hitCounts = new Map<ThreadId, number>();
     const hitCount = (threadId: ThreadId) => hitCounts.get(threadId) ?? 1;
     for (const row of rows) {
-      const match = scoreMessageMatch(row.text, input.query);
+      const text = row.text.replace(MARKDOWN_LINK, "$1");
+      const match = scoreMessageMatch(text, input.query);
       if (match === null) continue;
-      const hit = { row, ...match };
+      const hit = { row, text, ...match };
       const current = best.get(row.threadId);
       if (current === undefined || hit.quality > current.quality) {
         hitCounts.set(row.threadId, 1);
@@ -334,13 +341,13 @@ export const make = Effect.gen(function* () {
         newer(left, right),
     );
     return {
-      matches: ranked.slice(0, input.limit ?? 50).map(({ row, quality, offset }) => ({
+      matches: ranked.slice(0, input.limit ?? 50).map(({ row, text, quality, offset }) => ({
         hits: hitCount(row.threadId),
         threadId: row.threadId,
         messageId: row.messageId,
         projectId: row.projectId,
         source: row.source,
-        snippet: buildSearchSnippet(row.text, offset),
+        snippet: buildSearchSnippet(text, offset),
         messageCreatedAt: row.messageCreatedAt,
         quality,
       })),

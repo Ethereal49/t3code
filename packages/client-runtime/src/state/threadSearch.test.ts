@@ -10,6 +10,7 @@ import { expect, it } from "vite-plus/test";
 
 import {
   claimThreadOpen,
+  nextShownOrder,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   threadSearchMatchKey,
@@ -168,6 +169,16 @@ it("counts recency from what the user wrote, else from when the thread began", (
   ).toBe(Date.parse("2026-10-05T00:00:00.000Z"));
   // An older server omits the field.
   expect(threadSearchSubject(thread, null).activityAt).toBe(Date.parse("2026-10-20T00:00:00.000Z"));
+});
+
+it("keeps shown message rows in place when a slower environment answers", () => {
+  const first = nextShownOrder(null, "needle", ["a1", "a2"]);
+  // The slow environment ranks above; shown rows hold and its rows go below.
+  const second = nextShownOrder(first, "needle", ["b1", "a1", "b2", "a2"]);
+  expect(second.keys).toEqual(["a1", "a2", "b1", "b2"]);
+  expect(nextShownOrder(second, "needle", ["b1", "a1", "b2", "a2"])).toBe(second);
+  // A new query starts from its own ranking.
+  expect(nextShownOrder(second, "needles", ["b1", "a1"]).keys).toEqual(["b1", "a1"]);
 });
 
 it("sends one open per thread every ten minutes by this client's clock", () => {

@@ -2,8 +2,10 @@ import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
   claimThreadOpen,
+  nextShownOrder,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
+  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
@@ -421,7 +423,7 @@ export function CommandPalette(props: {
     selectThreadRoute,
     threads,
   ]);
-  const messageMatchKeys = useMemo(() => {
+  const rankedMessageKeys = useMemo(() => {
     const subjectByKey = new Map(
       items.flatMap((item) => (item.threadSearch ? [[item.key, item.threadSearch] as const] : [])),
     );
@@ -434,6 +436,11 @@ export function CommandPalette(props: {
       now,
     ).map(keyOf);
   }, [items, now, query, search.matches]);
+  // Rows already shown keep their places when a slower environment answers.
+  const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
+  const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys);
+  if (messageOrder !== shownOrder) setShownOrder(messageOrder);
+  const messageMatchKeys = messageOrder.keys;
   const results = useMemo(() => {
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
     // Recent threads leave out the open one, which would always lead them.

@@ -97,10 +97,10 @@ export function useThreadSearch(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearchResultsAtom(searchKey),
   );
   const isPending = canSearch && (normalizedQuery !== debouncedQuery || result.isLoading);
-  // Results show once every environment answered, so rows never move under
-  // the pointer when a slower one arrives.
+  // What fast environments returned shows without waiting for a slow one;
+  // callers keep shown rows in place with `nextShownOrder`.
   const ready =
-    settledQuery !== null && !result.isLoading
+    settledQuery !== null && (!result.isLoading || result.matches.length > 0)
       ? { query: settledQuery, matches: result.matches }
       : null;
   // Kept from earlier renders: React's pattern for information from previous renders.

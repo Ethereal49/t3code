@@ -123,7 +123,6 @@ describe("buildThreadActionItems", () => {
         [`${local.environmentId}:${local.projectId}`, { title: "Local project" }],
         [`${remote.environmentId}:${remote.projectId}`, { title: "Remote project" }],
       ]),
-      sortOrder: "updated_at",
       icon: null,
       runThread,
     });
@@ -149,7 +148,6 @@ describe("buildThreadActionItems", () => {
         }),
       ],
       projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "Project" }]]),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async (_thread) => undefined,
     });
@@ -178,7 +176,6 @@ describe("buildThreadActionItems", () => {
     const items = buildThreadActionItems({
       threads,
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -220,7 +217,6 @@ describe("buildThreadActionItems", () => {
         }),
       ],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -257,7 +253,6 @@ describe("buildThreadActionItems", () => {
     const threadSearchItems = buildThreadActionItems({
       threads: [makeThread({ title: "Upgrade to pnpm 12" })],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -310,7 +305,6 @@ describe("buildThreadActionItems", () => {
     const threadSearchItems = buildThreadActionItems({
       threads: [makeThread({ title: "Lakebed performance gains" })],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -347,7 +341,6 @@ describe("buildThreadActionItems", () => {
         }),
       ],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -514,7 +507,6 @@ describe("buildThreadActionItems", () => {
     const items = buildThreadActionItems({
       threads: [idThread, titleThread],
       projectByKey: new Map([[`${LOCAL_ENVIRONMENT_ID}:${PROJECT_ID}`, { title: "T3 Code" }]]),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async (_thread) => undefined,
     });
@@ -559,7 +551,6 @@ describe("buildThreadActionItems", () => {
         }),
       ],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -591,7 +582,6 @@ describe("buildThreadActionItems", () => {
         }),
       ],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -628,7 +618,6 @@ describe("buildThreadActionItems", () => {
         }),
       ],
       projectByKey: new Map(),
-      sortOrder: "updated_at",
       icon: null,
       runThread: async () => undefined,
     });
@@ -695,7 +684,6 @@ it.each([
       makeThread({ id: ThreadId.make("unrelated"), title: "Other work" }),
     ],
     projectByKey: new Map(),
-    sortOrder: "updated_at",
     icon: null,
     runThread: async () => undefined,
   });

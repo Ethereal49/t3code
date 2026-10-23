@@ -2,7 +2,9 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import { requestThreadFindQuery } from "./chat/threadFindActionBus";
 import {
   claimThreadOpen,
+  nextShownOrder,
   type EnvironmentThreadSearchMatch,
+  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   foldSearchQuery,
@@ -16,7 +18,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { MessageSquareIcon } from "lucide-react";
 import { useState } from "react";
 
-import { useClientSettings } from "../hooks/useSettings";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
@@ -84,7 +85,6 @@ export function useCommandPaletteThreadItems(input: {
   const { activeThread, threadSearchQuery } = input;
   const navigate = useNavigate();
   const threads = useThreadShells();
-  const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);
@@ -104,7 +104,6 @@ export function useCommandPaletteThreadItems(input: {
       : {}),
     ...(activeThread ? { activeThread } : {}),
     projectByKey,
-    sortOrder: sidebarThreadSortOrder,
     icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
     renderLeadingContent: (thread) => <ThreadRowLeadingStatus thread={thread} />,
     renderTrailingContent: (thread) => (
@@ -173,7 +172,7 @@ export function useCommandPaletteThreadItems(input: {
   const itemByValue = new Map(threadItems.map((item) => [item.value, item]));
   const itemForMatch = (match: EnvironmentThreadSearchMatch) =>
     itemByValue.get(`thread:${match.environmentId}:${match.threadId}`);
-  const threadMessageItems = rankMessageMatches(
+  const rankedMessageItems = rankMessageMatches(
     messageSearch.matches,
     (match) => itemForMatch(match)?.threadSearch,
     foldSearchQuery(threadSearchQuery),
@@ -214,6 +213,16 @@ export function useCommandPaletteThreadItems(input: {
       },
     ];
   });
+
+  const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
+  const order = nextShownOrder(
+    shownOrder,
+    messageSearch.query,
+    rankedMessageItems.map((item) => item.value),
+  );
+  if (order !== shownOrder) setShownOrder(order);
+  const messageItemByValue = new Map(rankedMessageItems.map((item) => [item.value, item]));
+  const threadMessageItems = order.keys.flatMap((value) => messageItemByValue.get(value) ?? []);
 
   return {
     threadItems,

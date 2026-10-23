@@ -154,6 +154,35 @@ export function threadSearchSubject(
   };
 }
 
+/** Message result keys in the order a search box shows them for `query`. */
+export interface ShownOrder {
+  readonly query: string;
+  readonly keys: ReadonlyArray<string>;
+}
+
+/**
+ * The order to show message results in: keys already shown for this query
+ * keep their places and new ones go below in rank order, so a slower
+ * environment's answer never moves a row under the pointer or the keyboard
+ * highlight. Returns `previous` when nothing changed, so it can sit in React
+ * state.
+ */
+export function nextShownOrder(
+  previous: ShownOrder | null,
+  query: string,
+  ranked: ReadonlyArray<string>,
+): ShownOrder {
+  if (previous?.query !== query) return { query, keys: ranked };
+  const listed = new Set(ranked);
+  const kept = previous.keys.filter((key) => listed.has(key));
+  const held = new Set(kept);
+  const keys = [...kept, ...ranked.filter((key) => !held.has(key))];
+  return keys.length === previous.keys.length &&
+    keys.every((key, index) => key === previous.keys[index])
+    ? previous
+    : { query, keys };
+}
+
 export interface SettledThreadSearch {
   readonly query: string;
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
