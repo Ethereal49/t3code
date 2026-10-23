@@ -20,8 +20,10 @@ import {
   foldSearchQuery,
   rankMessageMatches,
   rankSearchItems,
+  messageMatchWeight,
   scoreMessageMatch,
   scoreThreadSearch,
+  SEARCH_RECENCY_HALF_LIFE_MS,
   spellOutLetters,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
@@ -342,6 +344,9 @@ export const make = Effect.gen(function* () {
       Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
       newer(left, right);
     const best = new Map<ThreadId, Hit>();
+    // Matching messages per thread: a thread that keeps using the word ranks
+    // above a passing mention.
+    const hitCounts = new Map<ThreadId, number>();
     // Returns how many rows matched as words.
     const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
       let words = 0;
@@ -349,6 +354,7 @@ export const make = Effect.gen(function* () {
         const match = scoreMessageMatch(row.text, input.query);
         if (match === null) continue;
         if (!match.midWord) words++;
+        hitCounts.set(row.threadId, (hitCounts.get(row.threadId) ?? 0) + 1);
         const hit = { row, ...match };
         const current = best.get(row.threadId);
         if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
@@ -398,11 +404,24 @@ export const make = Effect.gen(function* () {
         }
       }),
     );
+    const now = DateTime.toEpochMillis(yield* DateTime.now);
+    const relevance = (hit: Hit) =>
+      messageMatchWeight(hitCounts.get(hit.row.threadId) ?? 1) *
+      (1 +
+        2 **
+          (-Math.max(0, now - Date.parse(hit.row.messageCreatedAt ?? "")) /
+            SEARCH_RECENCY_HALF_LIFE_MS));
+    // Match quality first, then how much the thread uses the word and how
+    // recently; a missing time counts as old.
     const ranked = [...best.values()].sort(
-      (left, right) => right.quality - left.quality || newer(left, right),
+      (left, right) =>
+        right.quality - left.quality ||
+        (relevance(right) || 0) - (relevance(left) || 0) ||
+        newer(left, right),
     );
     return {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, quality, offset }) => ({
+        hits: hitCounts.get(row.threadId) ?? 1,
         threadId: row.threadId,
         projectId: row.projectId,
         source: row.source,
@@ -468,7 +487,7 @@ export const make = Effect.gen(function* () {
       normalizedQuery,
       now,
       { picks: false },
-    ).map(({ quality: _quality, ...match }) => ({
+    ).map(({ quality: _quality, hits: _hits, ...match }) => ({
       ...match,
       title: subjectById.get(match.threadId)!.title,
     }));

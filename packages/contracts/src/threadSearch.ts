@@ -36,6 +36,8 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
    * starts one, 0.3 when one only appears inside words. Older servers omit it.
    */
   quality: Schema.optionalKey(Schema.Finite),
+  /** How many of the thread's newest messages match. Older servers omit it. */
+  hits: Schema.optionalKey(Schema.Int),
 });
 export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
 

@@ -295,6 +295,8 @@ export interface ThreadSearchPullRequest {
   readonly references: ReadonlyArray<string>;
 }
 
+const SEARCHED_PULL_REQUEST_TITLES = 3;
+
 /** Pull requests thread search matches by number, title, and reference. */
 export function threadSearchPullRequests(thread: {
   readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
@@ -311,9 +313,14 @@ export function threadSearchPullRequests(thread: {
   });
   const branch = thread.branchPullRequest ? [entry(thread.branchPullRequest, null)] : [];
   if (thread.pullRequests !== undefined && thread.pullRequests.length > 0) {
+    // Every pull request matches by number and link, but only the newest few
+    // by title: a triage thread linked to dozens would match almost any word.
+    const newestFirst = [...visibleThreadPullRequests(thread.pullRequests)].sort(
+      (left, right) => latestUpdatedAt(right) - latestUpdatedAt(left),
+    );
     return branch.concat(
-      visibleThreadPullRequests(thread.pullRequests).map((link) =>
-        entry(link, link.snapshot?.title ?? null),
+      newestFirst.map((link, index) =>
+        entry(link, index < SEARCHED_PULL_REQUEST_TITLES ? (link.snapshot?.title ?? null) : null),
       ),
     );
   }

@@ -331,6 +331,39 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("ranks a thread about the word above a passing mention", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:about");
+      yield* createProject(project);
+      const about = ThreadId.make("thread:about-osprey");
+      const mention = ThreadId.make("thread:mention-osprey");
+      yield* Effect.forEach(
+        [
+          thread(about, project),
+          ...Array.from({ length: 12 }, (_, index) =>
+            message(about, `about-osprey-${index}`, "assistant", `osprey step ${index}`, {
+              minute: 2,
+            }),
+          ),
+          thread(mention, project),
+          message(mention, "mention-osprey", "user", "also check osprey", { minute: 5 }),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.search({ query: "osprey" });
+      assert.deepEqual(
+        matches.map((match) => [match.threadId, match.hits]),
+        [
+          [about, 12],
+          [mention, 1],
+        ],
+      );
+    }),
+  );
+
   it.effect("finds an older word when one busy thread fills the newest hits", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

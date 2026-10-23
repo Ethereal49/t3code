@@ -362,7 +362,7 @@ function matchJoinedWords(field: SearchField, token: string): TokenMatch | null 
 
 /**
  * Initials and word-start runs: each next letter of `token` either directly
- * follows the last one or starts a later word, so "fsl" and "fixsid" find
+ * follows the last one or starts the next word, so "fsl" and "fixsid" find
  * "Fix sidebar lag", as in VS Code. Every run but the last is one letter or
  * a whole word. Scattered letters would find any long title ("cron" in
  * "creation"). Weakest match, tried last.
@@ -375,12 +375,25 @@ function matchInitials(field: SearchField, token: string): TokenMatch | null {
     }
     return -1;
   };
+  const followingWordStart = (from: number) => {
+    for (let index = from; index < field.text.length; index++) {
+      if (field.wordStarts[index]) return index;
+    }
+    return -1;
+  };
   const runFrom = (start: number) => {
     const letters: SearchRange[] = [{ start, end: start + 1 }];
     let runStart = start;
     for (const letter of token.slice(1)) {
       const after = letters.at(-1)!.end;
-      const at = field.text[after] === letter ? after : nextWordStart(after, letter);
+      // The very next word, not any later one: "fts" is not spread over nine.
+      const next = followingWordStart(after);
+      const at =
+        field.text[after] === letter
+          ? after
+          : next !== -1 && field.text[next] === letter
+            ? next
+            : -1;
       if (at === -1) return null;
       // Before the next word, a run is an initial or a whole word of three or
       // more letters ("fix" in "fixsid"). Anything else is a coincidence:
@@ -1159,12 +1172,26 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
 }
 
 /**
- * Orders message matches from the server, from any number of environments,
- * like title matches: by match class, then threads picked for the query, then
- * match quality times use, then the newest message.
+ * How strongly a thread's messages match among matches of one quality: more
+ * for a thread that keeps using the word than for a passing mention, up to
+ * twice as much at about thirty matching messages.
+ */
+export function messageMatchWeight(hits: number): number {
+  return 1 + Math.min(Math.log2(1 + hits), 5) / 5;
+}
+
+/**
+ * Orders message matches from the server, from any number of environments:
+ * by match quality (whole words, then word prefixes, then inside words), then
+ * threads picked for the query, then hit count times use, then the newest
+ * message.
  */
 export function rankMessageMatches<
-  T extends { readonly quality?: number; readonly messageCreatedAt?: string | null },
+  T extends {
+    readonly quality?: number;
+    readonly hits?: number;
+    readonly messageCreatedAt?: string | null;
+  },
 >(
   matches: ReadonlyArray<T>,
   subjectOf: (match: T) => ThreadSearchSubject | undefined,
@@ -1184,13 +1211,13 @@ export function rankMessageMatches<
           quality,
           pickedAt:
             options?.picks === false ? 0 : (activePick(subject, normalizedQuery, now)?.at ?? 0),
-          score: quality * threadUsageBoost(subject, now),
+          score: messageMatchWeight(match.hits ?? 1) * threadUsageBoost(subject, now),
         },
       ];
     })
     .sort(
       (left, right) =>
-        matchClass(right.quality) - matchClass(left.quality) ||
+        right.quality - left.quality ||
         right.pickedAt - left.pickedAt ||
         right.score - left.score ||
         (right.match.messageCreatedAt ?? "").localeCompare(left.match.messageCreatedAt ?? ""),

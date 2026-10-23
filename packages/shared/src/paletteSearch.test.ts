@@ -353,6 +353,8 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
   it("matches initials and word-start runs as a last resort, highlighting each letter", () => {
     const threads = [thread("Fix sidebar lag"), thread("Unrelated work")];
     expect(rankTitles("fsl", threads)).toEqual(["Fix sidebar lag"]);
+    // Initials take consecutive words.
+    expect(rankTitles("wip", [thread("Fix Wrong Icon for Cloned Projects")])).toEqual([]);
     expect(rankTitles("fixsid", threads)).toEqual(["Fix sidebar lag"]);
     // A later "F" can start the run.
     expect(rankTitles("fixsid", [thread("Feature: Fix sidebar lag")])).toEqual([
@@ -405,7 +407,7 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
 });
 
 describe("rankMessageMatches", () => {
-  it("merges environments by match quality and use, with picks first", () => {
+  it("merges environments by match quality, then picks, then use", () => {
     const subjects = new Map([
       ["a-word", thread("A word")],
       ["a-word-2", thread("A word too")],
@@ -430,7 +432,23 @@ describe("rankMessageMatches", () => {
       rankMessageMatches(matches, (match) => subjects.get(match.key), "needle", NOW).map(
         (match) => match.key,
       ),
-    ).toEqual(["b-picked", "b-recent", "a-word", "a-word-2", "b-prefix"]);
+    ).toEqual(["b-recent", "a-word", "a-word-2", "b-picked", "b-prefix"]);
+  });
+
+  it("ranks a thread that keeps using the word above a passing mention of equal quality", () => {
+    const subjects = new Map([
+      ["mention", thread("Mention", { activityAt: NOW - DAY })],
+      ["about", thread("About it", { activityAt: NOW - 10 * DAY })],
+    ]);
+    const matches = [
+      { key: "mention", quality: 1, hits: 1 },
+      { key: "about", quality: 1, hits: 21 },
+    ];
+    expect(
+      rankMessageMatches(matches, (match) => subjects.get(match.key), "tailscale", NOW).map(
+        (match) => match.key,
+      ),
+    ).toEqual(["about", "mention"]);
   });
 
   it("keeps matches inside words below word matches, however used", () => {
