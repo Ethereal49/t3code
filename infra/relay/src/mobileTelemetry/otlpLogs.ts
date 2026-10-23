@@ -28,8 +28,8 @@ export const sourceMapKey = (platform: MobilePlatform, kind: SourceMapKind, id: 
 
 /**
  * Keys that may hold the map for a bundle, most specific first: the update's
- * own map, then the map of the binary's embedded bundle. An embedded launch
- * reports the embedded bundle's update id, which has no `ota` map.
+ * own map, then the map of the binary's embedded bundle. Observe reports no
+ * update id for an embedded launch, so those only match the build map.
  */
 export function sourceMapKeys(identity: BundleIdentity): ReadonlyArray<string> {
   const keys: Array<string> = [];
