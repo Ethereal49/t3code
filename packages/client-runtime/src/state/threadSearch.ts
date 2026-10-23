@@ -123,6 +123,7 @@ export type ThreadSearchShell = Pick<
   | "createdAt"
   | "updatedAt"
   | "latestUserMessageAt"
+  | "latestUserAuthoredMessageAt"
   | "opens"
 > &
   Partial<Pick<EnvironmentThreadShell, "pullRequests" | "linkedPullRequest" | "branchPullRequest">>;
@@ -136,7 +137,10 @@ export function threadSearchSubject(
   projectTitle: string | null | undefined,
   environmentLabel?: string | null,
 ): ThreadSearchSubject {
-  const activityAt = getThreadSortTimestamp(thread, "updated_at");
+  // What the user wrote, not agent wakes or task notices in the user role.
+  const activityAt = thread.latestUserAuthoredMessageAt
+    ? Date.parse(thread.latestUserAuthoredMessageAt)
+    : getThreadSortTimestamp(thread, "updated_at");
   const localOpenedAt = localThreadOpens.get(`${thread.environmentId}:${thread.id}`) ?? 0;
   return {
     id: thread.id,
@@ -146,10 +150,11 @@ export function threadSearchSubject(
     environmentLabel: environmentLabel ?? null,
     pullRequests: threadSearchPullRequests(thread),
     activityAt: Number.isFinite(activityAt) ? activityAt : null,
-    // This client's own latest open counts too, though the server merged it.
+    // This client's own latest open counts too: the server merged it, or has
+    // no record yet (an older server ignores opens).
     opens:
-      thread.opens && localOpenedAt > thread.opens.openedAt
-        ? { ...thread.opens, openedAt: localOpenedAt }
+      localOpenedAt > (thread.opens?.openedAt ?? 0)
+        ? { score: 1, picks: [], ...thread.opens, openedAt: localOpenedAt }
         : (thread.opens ?? null),
   };
 }

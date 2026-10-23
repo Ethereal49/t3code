@@ -632,7 +632,10 @@ export function buildThreadListV2Items(input: {
     query.length > 0
       ? new Set(
           rankSearchItems(listedThreads, (thread, options) =>
-            scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, options),
+            scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, {
+              ...options,
+              picks: false,
+            }),
           ).map(({ item }) => item),
         )
       : null;

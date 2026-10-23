@@ -139,6 +139,12 @@ it("ranks recent threads by this client's own latest open", () => {
   };
   claimThreadOpen(envA, "thread-local", 5_000);
   expect(threadSearchSubject(thread, null).opens?.openedAt).toBe(5_000);
+  // Also when the server has no record of opens, as an older server would not.
+  claimThreadOpen(envA, "thread-unrecorded", 6_000);
+  expect(
+    threadSearchSubject({ ...thread, id: ThreadId.make("thread-unrecorded"), opens: null }, null)
+      .opens,
+  ).toEqual({ openedAt: 6_000, score: 1, picks: [] });
 });
 
 it("sends one open per thread every ten minutes by this client's clock", () => {

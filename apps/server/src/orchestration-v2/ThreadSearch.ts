@@ -129,26 +129,28 @@ const SNIPPET_LEAD = 24;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
 /**
- * Up to 240 characters starting a few words before the first match, with
- * ellipses where the text was cut.
+ * Up to 240 characters starting a few words before the match at `matchStart`,
+ * with ellipses where the text was cut. Only the shown part has its
+ * whitespace collapsed, so an offset into the raw text stays valid.
  */
-export function buildSearchSnippet(text: string, query: string): string {
-  const normalizedText = text.replace(/\s+/g, " ").trim();
-  const matchStart = scoreMessageMatch(normalizedText, query)?.offset ?? 0;
-  if (normalizedText.length <= SNIPPET_LENGTH && matchStart <= SNIPPET_LEAD * 2) {
-    return normalizedText;
+export function buildSearchSnippet(text: string, matchStart: number): string {
+  if (matchStart <= SNIPPET_LEAD * 2 && text.length <= SNIPPET_LENGTH * 2) {
+    const whole = text.replace(/\s+/g, " ").trim();
+    if (whole.length <= SNIPPET_LENGTH) return whole;
   }
-  const bodyLength = SNIPPET_LENGTH - 2;
   let start = Math.max(0, matchStart - SNIPPET_LEAD);
-  const wordStart = normalizedText.indexOf(" ", start);
-  if (start > 0 && wordStart !== -1 && wordStart < matchStart) start = wordStart + 1;
-  let end = Math.min(normalizedText.length, start + bodyLength);
+  const wordStart = text.slice(start, matchStart).search(/\s/);
+  if (start > 0 && wordStart !== -1) start += wordStart + 1;
   // Cut between characters, not inside an emoji's surrogate pair.
-  if (isLowSurrogate(normalizedText.charCodeAt(start))) start++;
-  if (isLowSurrogate(normalizedText.charCodeAt(end))) end--;
-  return `${start > 0 ? "…" : ""}${normalizedText.slice(start, end)}${
-    end < normalizedText.length ? "…" : ""
-  }`;
+  if (isLowSurrogate(text.charCodeAt(start))) start++;
+  // Collapsing whitespace shortens the text, so read a little more of it.
+  const rawEnd = Math.min(text.length, start + SNIPPET_LENGTH * 2);
+  const shown = text.slice(start, rawEnd).replace(/\s+/g, " ").trim();
+  const bodyLength = SNIPPET_LENGTH - 2;
+  let end = Math.min(shown.length, bodyLength);
+  if (isLowSurrogate(shown.charCodeAt(end))) end--;
+  const cut = end < shown.length || rawEnd < text.length;
+  return `${start > 0 ? "…" : ""}${shown.slice(0, end)}${cut ? "…" : ""}`;
 }
 
 // The newest messages that hold every token, from active, non-subagent
@@ -158,8 +160,10 @@ export function buildSearchSnippet(text: string, query: string): string {
 // happen in JS, with the rules titles use.
 //
 // Without the index (an SQLite build without FTS5 trigrams, see migration
-// 69) or for two-character CJK words, the same query scans the messages
-// migration 69 would index. Exported so a test can check the query plan.
+// 69) or for two-character CJK words, the same query scans the newest
+// messages migration 69 would index. That scan is weaker than the index: it
+// ignores case for ASCII only and does not fold accents ("cafe" misses
+// "café"). Exported so a test can check the query plan.
 export const messageHitsQuery = (
   sql: SqlClient.SqlClient,
   { match, substrings, projectId }: typeof SearchRequest.Encoded,
@@ -273,7 +277,9 @@ export const make = Effect.gen(function* () {
         (
           SELECT messages.updated_at
           FROM orchestration_v2_projection_messages AS messages
-          WHERE messages.thread_id = threads.thread_id AND messages.role = 'user'
+          WHERE messages.thread_id = threads.thread_id
+            AND messages.role = 'user'
+            AND COALESCE(json_extract(messages.payload_json, '$.createdBy'), 'user') = 'user'
           ORDER BY messages.updated_at DESC, messages.message_id DESC
           LIMIT 1
         ) AS "latestUserMessageAt"
@@ -313,6 +319,7 @@ export const make = Effect.gen(function* () {
       readonly row: typeof SearchRow.Type;
       readonly quality: number;
       readonly midWord: boolean;
+      readonly offset: number;
     };
     const compareHits = (left: Hit, right: Hit) =>
       right.quality - left.quality ||
@@ -326,7 +333,7 @@ export const make = Effect.gen(function* () {
         const match = scoreMessageMatch(row.text, input.query);
         if (match === null) continue;
         if (!match.midWord) words++;
-        const hit = { row, quality: match.quality, midWord: match.midWord };
+        const hit = { row, ...match };
         const current = best.get(row.threadId);
         if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
       }
@@ -360,11 +367,11 @@ export const make = Effect.gen(function* () {
       (left, right) => right.quality - left.quality || left.row.score - right.row.score,
     );
     return {
-      matches: ranked.slice(0, input.limit ?? 50).map(({ row, midWord }) => ({
+      matches: ranked.slice(0, input.limit ?? 50).map(({ row, midWord, offset }) => ({
         threadId: row.threadId,
         projectId: row.projectId,
         source: row.source,
-        snippet: buildSearchSnippet(row.text, input.query),
+        snippet: buildSearchSnippet(row.text, offset),
         messageCreatedAt: row.messageCreatedAt,
         ...(midWord ? { midWord: true as const } : {}),
       })),
@@ -401,7 +408,11 @@ export const make = Effect.gen(function* () {
       ]),
     );
     const titleHits: ThreadSearchHit[] = rankSearchItems(candidates, (row, options) =>
-      scoreThreadSearch(normalizedQuery, subjectById.get(row.thread.id)!, now, options),
+      // An agent's search has no use for the user's palette picks.
+      scoreThreadSearch(normalizedQuery, subjectById.get(row.thread.id)!, now, {
+        ...options,
+        picks: false,
+      }),
     )
       .slice(0, limit)
       .map(({ item }) => ({
@@ -424,6 +435,7 @@ export const make = Effect.gen(function* () {
       (match) => subjectById.get(match.threadId),
       normalizedQuery,
       now,
+      { picks: false },
     ).map(({ rank: _rank, midWord: _midWord, ...match }) => ({
       ...match,
       title: subjectById.get(match.threadId)!.title,

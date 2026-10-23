@@ -209,6 +209,18 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("pnpm13", threads)).toEqual([]);
   });
 
+  it("reads whole words typed together, but not scattered letters", () => {
+    const threads = [
+      thread("VS Code extension settings"),
+      thread("Fix UI bug in sidebar"),
+      thread("I plan to open source all of lakebed in the next few weeks"),
+    ];
+    expect(rankTitles("vscode", threads)).toEqual(["VS Code extension settings"]);
+    expect(rankTitles("fixuibug", threads)).toEqual(["Fix UI bug in sidebar"]);
+    expect(rankTitles("lint", threads)).toEqual([]);
+    expect(rankTitles("strasse", [thread("Straße bauen")])).toEqual(["Straße bauen"]);
+  });
+
   it("stores picked queries without splitting an emoji", () => {
     expect(pickedQuery(`${"a".repeat(31)}🚀`)).toBe("a".repeat(31));
     expect(pickedQuery("  Upl ")).toBe("Upl");
@@ -230,6 +242,13 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "tigris", at: NOW - DAY }] },
     });
     expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
+    expect(scoreThreadSearch("tig", picked, NOW)?.hint).toEqual({
+      label: "Picked before for",
+      text: "tigris",
+      ranges: [],
+    });
+    // Off where a pick would show up unexplained.
+    expect(scoreThreadSearch("tig", picked, NOW, { picks: false })).toBeNull();
     expect(rankTitles("ti", [picked])).toEqual([]);
   });
 });

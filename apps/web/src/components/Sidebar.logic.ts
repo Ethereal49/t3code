@@ -999,7 +999,10 @@ export function searchSidebarThreads<
   const normalizedQuery = foldSearchQuery(query);
   if (normalizedQuery.length === 0) return [];
   const titleMatches = rankSearchItems(threads, (thread, options) =>
-    scoreThreadSearch(normalizedQuery, threadSearchSubject(thread, null), now, options),
+    scoreThreadSearch(normalizedQuery, threadSearchSubject(thread, null), now, {
+      ...options,
+      picks: false,
+    }),
   ).map(({ item }) => item);
   const listed = new Set(titleMatches);
   const contentMatches = threads.filter(

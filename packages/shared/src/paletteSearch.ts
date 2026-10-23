@@ -44,8 +44,19 @@ export interface SearchRange {
 const fieldCache = new Map<string, SearchField>();
 const FIELD_CACHE_LIMIT = 100_000;
 
+// Letters that Unicode does not decompose into a base letter and a mark.
+const LETTER_EXPANSIONS: Readonly<Record<string, string>> = {
+  ß: "ss",
+  æ: "ae",
+  œ: "oe",
+  ø: "o",
+  ł: "l",
+  đ: "d",
+};
+
 function foldCharacter(character: string): string {
-  return character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
+  const folded = character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
+  return LETTER_EXPANSIONS[folded] ?? folded;
 }
 
 // Chinese and Japanese text has no spaces, so each ideograph or kana starts a word.
@@ -256,7 +267,43 @@ function matchToken(
       }
     }
   }
-  return best ?? (initials ? matchInitials(field, token) : null);
+  return (
+    best ?? (initials ? (matchJoinedWords(field, token) ?? matchInitials(field, token)) : null)
+  );
+}
+
+/**
+ * Whole words typed together: "vscode" is "VS Code", "fixuibug" is "Fix UI
+ * bug". Every part is a whole word but the last, which may be a prefix. Kept
+ * apart from initials, where two-letter runs would also find "l(akebed)
+ * in t(he)" for "lint".
+ */
+function matchJoinedWords(field: SearchField, token: string): TokenMatch | null {
+  for (let start = 0; start < field.text.length; start++) {
+    if (!field.wordStarts[start] || field.text[start] !== token[0]) continue;
+    const letters: SearchRange[] = [];
+    let at = start;
+    let rest = token;
+    while (rest.length > 0 && at < field.text.length) {
+      const end = wordEnd(field, at);
+      const word = field.text.slice(at, end);
+      if (word.startsWith(rest)) {
+        letters.push({ start: at, end: at + rest.length });
+        rest = "";
+      } else if (rest.startsWith(word)) {
+        letters.push({ start: at, end });
+        rest = rest.slice(word.length);
+        at = end;
+        while (at < field.text.length && !field.wordStarts[at]) at++;
+      } else {
+        break;
+      }
+    }
+    if (rest.length === 0 && letters.length > 1) {
+      return { score: INITIALS, start, end: letters.at(-1)!.end, letters };
+    }
+  }
+  return null;
 }
 
 /**
@@ -495,22 +542,51 @@ export interface MessageMatch {
  * accents are ignored, as in the server's index. Tokens too short for the
  * index ("12" in "pnpm 12") are the caller's to check.
  */
+interface PreparedMessageQuery {
+  readonly query: string;
+  readonly tooShort: ReadonlyArray<string>;
+  readonly tokens: ReadonlyArray<{
+    readonly token: string;
+    readonly foldedToken: string;
+    readonly short: boolean;
+    readonly accents: RegExp | null;
+  }>;
+}
+
+// The server scores up to thousands of hits for one query, so its tokens are
+// prepared once.
+let lastMessageQuery: PreparedMessageQuery | null = null;
+
+function prepareMessageQuery(query: string): PreparedMessageQuery {
+  if (lastMessageQuery?.query === query) return lastMessageQuery;
+  const { long, short } = messageSearchTokens(query);
+  lastMessageQuery = {
+    query,
+    tooShort: short,
+    tokens: long.map((token) => ({
+      token,
+      foldedToken: foldSearchQuery(token),
+      short: Array.from(token).length < MESSAGE_WORD_START_LENGTH,
+      accents: accentedFormsOf(token),
+    })),
+  };
+  return lastMessageQuery;
+}
+
 export function scoreMessageMatch(text: string, query: string): MessageMatch | null {
   const lowerText = text.toLowerCase();
   let folded: SearchField | null = null;
   let quality = 1;
   let offset = -1;
-  const { long, short: tooShort } = messageSearchTokens(query);
+  const prepared = prepareMessageQuery(query);
   // Too short for the index, so the caller only checked them as substrings:
   // "on" must start a word, not sit inside "connection".
-  for (const token of tooShort) {
+  for (const token of prepared.tooShort) {
     let index = lowerText.indexOf(token);
     while (index !== -1 && !startsWordAt(text, index)) index = lowerText.indexOf(token, index + 1);
     if (index === -1) return null;
   }
-  for (const token of long) {
-    const short = Array.from(token).length < MESSAGE_WORD_START_LENGTH;
-    const accents = accentedFormsOf(token);
+  for (const { token, foldedToken, short, accents } of prepared.tokens) {
     let first = -1;
     let wordStart = -1;
     let wholeWord = -1;
@@ -527,7 +603,6 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
     if (first === -1 || (wordStart === -1 && accents?.test(text))) {
       // Folding is per character, so bound it for very long messages.
       folded ??= foldSearchField(text.slice(0, 20_000));
-      const foldedToken = foldSearchQuery(token);
       for (
         let index = folded.text.indexOf(foldedToken);
         index !== -1 && wholeWord === -1;
@@ -729,20 +804,21 @@ const PICK_WINDOW_MS = 21 * DAY_MS;
 // match, say), but two letters are too little to go on.
 const PICK_ONLY_MIN_LENGTH = 3;
 
-function activePickAt(
+/** The latest pick of the thread for this query, while it lasts. */
+function activePick(
   thread: ThreadSearchSubject,
   normalizedQuery: string,
   now: number,
-): number | undefined {
+): ThreadOpenStats["picks"][number] | undefined {
   // The start of a picked query counts from three letters: "n" is too little
   // to go on, and would flip the group order between keystrokes.
   const prefix = normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
-  let latest: number | undefined;
+  let latest: ThreadOpenStats["picks"][number] | undefined;
   for (const pick of thread.opens?.picks ?? []) {
     if (now - pick.at > PICK_WINDOW_MS) continue;
-    if (pick.query === normalizedQuery || (prefix && pick.query.startsWith(normalizedQuery))) {
-      latest = Math.max(latest ?? pick.at, pick.at);
-    }
+    const matches =
+      pick.query === normalizedQuery || (prefix && pick.query.startsWith(normalizedQuery));
+    if (matches && (latest === undefined || pick.at > latest.at)) latest = pick;
   }
   return latest;
 }
@@ -848,7 +924,14 @@ export function scoreThreadSearch(
   normalizedQuery: string,
   thread: ThreadSearchSubject,
   now: number,
-  options?: { readonly typos?: boolean },
+  options?: {
+    readonly typos?: boolean;
+    /**
+     * Palette picks; off where a pick would show up unexplained, such as a
+     * sidebar filter or an agent's search.
+     */
+    readonly picks?: boolean;
+  },
 ): ThreadSearchMatch | null {
   const fields: WeightedSearchField[] = [{ value: thread.title, weight: 1 }];
   for (const pullRequest of thread.pullRequests ?? []) {
@@ -858,7 +941,8 @@ export function scoreThreadSearch(
   if (thread.branch) fields.push({ value: thread.branch, weight: 0.6 });
   if (thread.projectTitle) fields.push({ value: thread.projectTitle, weight: 0.45 });
   if (thread.environmentLabel) fields.push({ value: thread.environmentLabel, weight: 0.45 });
-  const pickedAt = activePickAt(thread, normalizedQuery, now);
+  const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
+  const pickedAt = pick?.at;
   const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#/, "");
   const fieldMatch = matchSearchFields(fieldQuery, fields, options);
   const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
@@ -878,7 +962,7 @@ export function scoreThreadSearch(
       : referenceMatch
         ? { label: "ID or link", text: normalizedQuery, ranges: [] }
         : pickOnly
-          ? { label: "Picked before for", text: normalizedQuery, ranges: [] }
+          ? { label: "Picked before for", text: pick!.query, ranges: [] }
           : matchHint(fieldQuery, thread, options?.typos ?? false);
   return {
     score: match.quality * threadUsageBoost(thread, now),
@@ -908,6 +992,7 @@ export function rankMessageMatches<
   subjectOf: (match: T) => ThreadSearchSubject | undefined,
   normalizedQuery: string,
   now: number,
+  options?: { readonly picks?: boolean },
 ): T[] {
   return matches
     .flatMap((match) => {
@@ -916,7 +1001,8 @@ export function rankMessageMatches<
       return [
         {
           match,
-          pickedAt: activePickAt(subject, normalizedQuery, now) ?? 0,
+          pickedAt:
+            options?.picks === false ? 0 : (activePick(subject, normalizedQuery, now)?.at ?? 0),
           score: threadUsageBoost(subject, now) / (1 + 0.15 * match.rank),
         },
       ];
