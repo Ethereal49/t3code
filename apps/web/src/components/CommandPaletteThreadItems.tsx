@@ -150,18 +150,19 @@ export function useCommandPaletteThreadItems(input: {
     now,
   ).flatMap((match) => {
     const item = itemForMatch(match);
-    return item
-      ? [
-          {
-            ...item,
-            threadContentMatch: {
-              source: match.source,
-              snippet: match.snippet,
-              query: messageSearch.query,
-            },
-          },
-        ]
-      : [];
+    if (!item) return [];
+    // The snippet replaces the project line, so a message row is as tall as a title row.
+    const { description: _description, ...rest } = item;
+    return [
+      {
+        ...rest,
+        threadContentMatch: {
+          source: match.source,
+          snippet: match.snippet,
+          query: messageSearch.query,
+        },
+      },
+    ];
   });
 
   return { threadItems, threadMessageItems, now, isSearchPending: messageSearch.isPending };

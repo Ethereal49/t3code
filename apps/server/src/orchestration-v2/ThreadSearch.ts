@@ -35,7 +35,11 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   }
 }
 
-const SearchRequest = Schema.Struct({ match: Schema.String, limit: Schema.Int });
+const SearchRequest = Schema.Struct({
+  match: Schema.String,
+  shortTokens: Schema.String,
+  limit: Schema.Int,
+});
 const SearchRow = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
@@ -44,22 +48,29 @@ const SearchRow = Schema.Struct({
   messageCreatedAt: Schema.NullOr(IsoDateTime),
 });
 
-// The trigram index cannot match tokens shorter than three characters, and a
-// two-letter substring of a message is noise rather than a match.
+// The trigram index cannot match tokens shorter than three characters. They
+// only narrow the indexed matches ("pnpm 12"); alone, a two-letter substring
+// of a message is noise rather than a match.
 const MIN_TOKEN_LENGTH = 3;
 // bm25 ranks every hit; grouping a bounded set of the best ones per thread
 // keeps a common word from turning into a scan of its whole posting list.
 const CANDIDATE_MESSAGE_LIMIT = 400;
 const SNIPPET_LENGTH = 240;
 
-/** Every long-enough token as a quoted FTS5 phrase, so all must appear. */
-function buildMessageSearchMatch(query: string): string | null {
-  const tokens = normalizeSearchQuery(query)
-    .split(" ")
-    .filter((token) => [...token].length >= MIN_TOKEN_LENGTH);
-  return tokens.length === 0
-    ? null
-    : tokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ");
+/**
+ * Every long-enough token as a quoted FTS5 phrase, so all must appear, and the
+ * shorter tokens for a substring check on the hits.
+ */
+function buildMessageSearch(
+  query: string,
+): { readonly match: string; readonly shortTokens: ReadonlyArray<string> } | null {
+  const tokens = normalizeSearchQuery(query).split(" ");
+  const long = tokens.filter((token) => [...token].length >= MIN_TOKEN_LENGTH);
+  if (long.length === 0) return null;
+  return {
+    match: long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" "),
+    shortTokens: tokens.filter((token) => token.length > 0 && !long.includes(token)),
+  };
 }
 
 // Result rows show one line, so the match must sit near the start to be seen.
@@ -129,7 +140,7 @@ export const make = Effect.gen(function* () {
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ match, limit }) => sql`
+    execute: ({ match, shortTokens, limit }) => sql`
       WITH hits AS (
         SELECT rowid, bm25(orchestration_v2_message_search) AS score
         FROM orchestration_v2_message_search
@@ -165,6 +176,10 @@ export const make = Effect.gen(function* () {
           AND projects.deleted_at IS NULL
           AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
             IS NOT 'subagent'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${shortTokens}) AS token
+            WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
+          )
       )
       SELECT
         thread_id AS "threadId",
@@ -219,9 +234,15 @@ export const make = Effect.gen(function* () {
 
   const search: ThreadSearch["Service"]["search"] = Effect.fn("ThreadSearch.search")(
     function* (input) {
-      const match = buildMessageSearchMatch(input.query);
-      if (match === null) return { matches: [] };
-      const rows = yield* read(searchRows({ match, limit: input.limit ?? 50 }));
+      const messageSearch = buildMessageSearch(input.query);
+      if (messageSearch === null) return { matches: [] };
+      const rows = yield* read(
+        searchRows({
+          match: messageSearch.match,
+          shortTokens: JSON.stringify(messageSearch.shortTokens),
+          limit: input.limit ?? 50,
+        }),
+      );
       return {
         matches: rows.map((row) => ({
           threadId: row.threadId,

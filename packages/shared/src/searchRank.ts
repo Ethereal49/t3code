@@ -121,8 +121,8 @@ interface TokenMatch extends SearchRange {
  * Best match of one folded query token in a field. Tokens shorter than four
  * characters only match at a word start ("del" should not find "model"). With
  * `typos`, a three-character token may swap a pair and a longer one may carry
- * one typo in a word prefix. Numbers never match with a typo: 22889 is not
- * pull request 22189.
+ * one typo in a word prefix that keeps its first letter. Numbers never match
+ * with a typo: 22889 is not pull request 22189.
  */
 function matchToken(field: SearchField, token: string, typos: boolean): TokenMatch | null {
   let best: TokenMatch | null = null;
@@ -149,6 +149,9 @@ function matchToken(field: SearchField, token: string, typos: boolean): TokenMat
     const word = field.text.slice(index, wordEnd(field, index));
     // A three-letter token only forgives a swapped pair: any other edit matches too much.
     const lengths = token.length === 3 ? [3] : [token.length - 1, token.length, token.length + 1];
+    // People rarely mistype the first letter, so a typo keeps it, unless it swaps the first two.
+    const firstLetterKept = word[0] === token[0] || (word[0] === token[1] && word[1] === token[0]);
+    if (!firstLetterKept) continue;
     for (const length of lengths) {
       if (length > word.length) continue;
       const prefix = word.slice(0, length);
@@ -407,9 +410,6 @@ export function scoreThreadSearch(
   };
 }
 
-/** Below this many exact matches, a search retries with typos allowed. */
-const SEARCH_TYPO_RETRY_BELOW = 3;
-
 export interface RankedSearchItem<T, M> {
   readonly item: T;
   readonly match: M;
@@ -421,9 +421,9 @@ export interface RankedSearchItem<T, M> {
  * strong match in a later group is not stuck under weak ones; ties keep the
  * given order.
  *
- * Typos are only tried when exact matching finds almost nothing across all
- * groups: typo matches would crowd a good result list, and skipping them
- * keeps a keystroke cheap.
+ * Typos are only tried when nothing matches exactly in any group: next to a
+ * correct match, typo matches are noise ("enter" finding "external"), and
+ * skipping them keeps a keystroke cheap.
  */
 export function rankSearchGroups<
   G,
@@ -442,9 +442,7 @@ export function rankSearchGroups<
       }),
     }));
   let ranked = rank(false);
-  if (ranked.reduce((count, entry) => count + entry.ranked.length, 0) < SEARCH_TYPO_RETRY_BELOW) {
-    ranked = rank(true);
-  }
+  if (ranked.every((entry) => entry.ranked.length === 0)) ranked = rank(true);
   return ranked
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];

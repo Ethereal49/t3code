@@ -75,7 +75,7 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("re", threads)).toEqual(["Release checklist", "Relay pairing"]);
     expect(rankTitles("rel", threads)).toEqual(["Release checklist", "Relay pairing"]);
     // Once the query leaves the pick behind, the better match wins again.
-    expect(rankTitles("rela", threads)).toEqual(["Relay pairing", "Release checklist"]);
+    expect(rankTitles("rela", threads)).toEqual(["Relay pairing"]);
   });
 
   it("matches pull request numbers, branches, and projects with every token somewhere", () => {
@@ -90,13 +90,20 @@ describe("scoreThreadSearch", () => {
     expect(scoreThreadSearch("trim lakebed", subject, NOW)).toBeNull();
   });
 
-  it("forgives one typo only when exact matching finds almost nothing", () => {
+  it("forgives one typo only when nothing matches exactly", () => {
     const threads = [thread("Hosting alternatives to Railway"), thread("Trim MCP model lists")];
     expect(rankTitles("railwya", threads)).toEqual(["Hosting alternatives to Railway"]);
     expect(rankTitles("trim mpc", threads)).toEqual(["Trim MCP model lists"]);
     expect(
-      rankTitles("rail", [...threads, thread("Rails upgrade"), thread("Rail map"), thread("Rai")]),
-    ).toEqual(["Rail map", "Rails upgrade", "Hosting alternatives to Railway"]);
+      rankTitles("drga", [thread("Restore drag handles"), thread("Organize indicators")]),
+    ).toEqual(["Restore drag handles"]);
+    expect(rankTitles("22889", [thread("Stats", { pullRequests: [{ number: 22189 }] })])).toEqual(
+      [],
+    );
+    // "enter" is not "external" when the right thread is already there.
+    expect(
+      rankTitles("cmd enter", [thread("Fix Cmd+Enter"), thread("Open links external")]),
+    ).toEqual(["Fix Cmd+Enter"]);
   });
 });
 

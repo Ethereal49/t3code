@@ -241,9 +241,10 @@ it.layer(layerTest)("ThreadSearch", (it) => {
         result.matches.map((match) => [match.threadId, match.snippet]),
         [[parent, "Rename ThreadSearchService before shipping"]],
       );
-      // "ab" alone cannot use the index; with a longer token it is ignored.
+      // "ab" alone cannot use the index; with a longer token it narrows the hits.
       assert.deepEqual((yield* search.search({ query: "ab" })).matches, []);
-      assert.lengthOf((yield* search.search({ query: "renam ab" })).matches, 1);
+      assert.lengthOf((yield* search.search({ query: "renam be" })).matches, 1);
+      assert.lengthOf((yield* search.search({ query: "renam ab" })).matches, 0);
     }),
   );
 });

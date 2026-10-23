@@ -190,7 +190,8 @@ On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads
 across connected environments by title, branch, pull request, or project.
 Threads you open often or recently rank higher, and the thread you picked for a
 query comes first when you type that query again. Threads whose messages contain
-your words of three or more letters appear below, under **In messages**.
+all your words appear below, under **In messages**. Message search needs at
+least one word of three or more letters.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
