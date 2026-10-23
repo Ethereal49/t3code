@@ -102,21 +102,24 @@ export class SourceMaps extends Context.Service<
   }
 >()("t3code-relay/mobileTelemetry/MobileTelemetry/SourceMaps") {}
 
-/**
- * Source map lookups over stored map text, cached. Build it once per Worker
- * isolate, not per request: decoding a production map costs ~150 ms.
- * `get` answers undefined when nothing is stored under a key.
- */
-export const makeSourceMaps = Effect.fn("MobileTelemetry.makeSourceMaps")(function* (
-  get: (key: string) => Effect.Effect<StoredSourceMap | undefined, SourceMapObjectError>,
-) {
+/** The source maps bucket. */
+export class SourceMapObjects extends Context.Service<
+  SourceMapObjects,
+  {
+    /** Undefined when nothing is stored under `key`. */
+    readonly get: (key: string) => Effect.Effect<StoredSourceMap | undefined, SourceMapObjectError>;
+  }
+>()("t3code-relay/mobileTelemetry/MobileTelemetry/SourceMapObjects") {}
+
+const makeSourceMaps = Effect.gen(function* () {
+  const objects = yield* SourceMapObjects;
   // Keyed by the candidate keys for one bundle, so a launch that only has a
   // build map resolves with one cache entry rather than a miss and a hit.
   const cache = yield* Cache.makeWith(
     (candidates: string) =>
       Effect.gen(function* () {
         for (const key of candidates.split("|")) {
-          const stored = yield* get(key);
+          const stored = yield* objects.get(key);
           if (stored === undefined) continue;
           if (stored.size > MAX_SOURCE_MAP_BYTES) {
             yield* Effect.logWarning("Stored mobile source map is too large", {
@@ -154,6 +157,12 @@ export const makeSourceMaps = Effect.fn("MobileTelemetry.makeSourceMaps")(functi
           ),
   });
 });
+
+/**
+ * Source map lookups over stored map text, cached. Build it once per Worker
+ * isolate, not per request: decoding a production map costs ~150 ms.
+ */
+export const layerSourceMaps = Layer.effect(SourceMaps, makeSourceMaps);
 
 export class MobileTelemetry extends Context.Service<
   MobileTelemetry,
@@ -223,29 +232,27 @@ const make = Effect.gen(function* () {
     return new TextEncoder().encode(encodeJson(payload));
   });
 
-  const forward = (destination: AxiomDestination, body: Uint8Array) =>
-    httpClient
-      .execute(
-        HttpClientRequest.post(destination.url, {
-          headers: {
-            authorization: `Bearer ${Redacted.value(settings.axiomToken)}`,
-            "x-axiom-dataset": destination.dataset,
-          },
-        }).pipe(HttpClientRequest.bodyUint8Array(body, "application/json")),
-      )
-      .pipe(
-        Effect.flatMap((response) =>
-          readCapped(response.stream, MAX_UPSTREAM_RESPONSE_BYTES).pipe(
-            // A response without a body has no stream at all.
-            Effect.catchIf(
-              (error) => error._tag === "HttpClientError" && error.reason._tag === "EmptyBodyError",
-              () => Effect.succeed(new Uint8Array(0)),
-            ),
-            Effect.map((responseBody) => ({ response, body: responseBody })),
-          ),
-        ),
-        Effect.timeoutOption(UPSTREAM_TIMEOUT),
-      );
+  const forward = Effect.fn("relay.mobile_telemetry.forward")(function* (
+    destination: AxiomDestination,
+    body: Uint8Array,
+  ) {
+    const response = yield* httpClient.execute(
+      HttpClientRequest.post(destination.url, {
+        headers: {
+          authorization: `Bearer ${Redacted.value(settings.axiomToken)}`,
+          "x-axiom-dataset": destination.dataset,
+        },
+      }).pipe(HttpClientRequest.bodyUint8Array(body, "application/json")),
+    );
+    const responseBody = yield* readCapped(response.stream, MAX_UPSTREAM_RESPONSE_BYTES).pipe(
+      // A response without a body has no stream at all.
+      Effect.catchIf(
+        (error) => error._tag === "HttpClientError" && error.reason._tag === "EmptyBodyError",
+        () => Effect.succeed(new Uint8Array(0)),
+      ),
+    );
+    return { response, body: responseBody };
+  }, Effect.timeoutOption(UPSTREAM_TIMEOUT));
 
   const handle = Effect.fn("relay.mobile_telemetry.ingest")(function* (
     request: HttpServerRequest.HttpServerRequest,

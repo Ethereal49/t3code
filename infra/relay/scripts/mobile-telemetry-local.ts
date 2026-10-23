@@ -110,21 +110,29 @@ const layerRoutes = Layer.unwrap(
       return file.startsWith(mapsDir + path.sep) ? file : undefined;
     };
 
-    const sourceMaps = yield* MobileTelemetry.makeSourceMaps((key) =>
-      Effect.gen(function* () {
-        const file = mapPath(key);
-        if (file === undefined || !(yield* fs.exists(file))) return undefined;
-        const { size } = yield* fs.stat(file);
-        return {
-          size: Number(size),
-          text: fs
-            .readFileString(file)
-            .pipe(
-              Effect.mapError((cause) => new MobileTelemetry.SourceMapObjectError({ key, cause })),
-            ),
-        };
-      }).pipe(Effect.mapError((cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }))),
-    );
+    const sourceMapObjects = Layer.succeed(MobileTelemetry.SourceMapObjects, {
+      get: Effect.fn("LocalSourceMapObjects.get")(
+        function* (key: string) {
+          const file = mapPath(key);
+          if (file === undefined || !(yield* fs.exists(file))) return undefined;
+          const { size } = yield* fs.stat(file);
+          return {
+            size: Number(size),
+            text: fs
+              .readFileString(file)
+              .pipe(
+                Effect.mapError(
+                  (cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }),
+                ),
+              ),
+          };
+        },
+        (effect, key) =>
+          effect.pipe(
+            Effect.mapError((cause) => new MobileTelemetry.SourceMapObjectError({ key, cause })),
+          ),
+      ),
+    });
 
     /** Stands in for Axiom: keeps each forwarded payload and summarizes logs. */
     const axiom = HttpClient.make((request) =>
@@ -158,7 +166,7 @@ const layerRoutes = Layer.unwrap(
               Layer.succeed(MobileTelemetry.MobileTelemetryRateLimiter, {
                 allow: () => Effect.succeed(true),
               }),
-              Layer.succeed(MobileTelemetry.SourceMaps, sourceMaps),
+              MobileTelemetry.layerSourceMaps.pipe(Layer.provide(sourceMapObjects)),
               Layer.succeed(HttpClient.HttpClient, axiom),
             ),
           ),

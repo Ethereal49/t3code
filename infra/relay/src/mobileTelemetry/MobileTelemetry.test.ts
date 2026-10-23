@@ -58,19 +58,23 @@ const makeHarness = Effect.fnUntraced(function* (options: Harness = {}) {
         ),
       ));
   // One per harness, as the Worker builds one per isolate.
-  const sourceMaps = yield* MobileTelemetry.makeSourceMaps((key) =>
-    Effect.sync(() => {
-      const object = options.objects?.[key];
-      if (object === undefined) return undefined;
-      return typeof object === "string"
-        ? {
-            size: object.length,
-            text: Effect.sync(() => {
-              objectReads.push(key);
-              return object;
-            }),
-          }
-        : { size: object.size, text: Effect.die("read an object too large to decode") };
+  const sourceMaps = yield* MobileTelemetry.SourceMaps.pipe(
+    Effect.provide(MobileTelemetry.layerSourceMaps),
+    Effect.provideService(MobileTelemetry.SourceMapObjects, {
+      get: (key) =>
+        Effect.sync(() => {
+          const object = options.objects?.[key];
+          if (object === undefined) return undefined;
+          return typeof object === "string"
+            ? {
+                size: object.length,
+                text: Effect.sync(() => {
+                  objectReads.push(key);
+                  return object;
+                }),
+              }
+            : { size: object.size, text: Effect.die("read an object too large to decode") };
+        }),
     }),
   );
   const layerTelemetry = MobileTelemetry.layer.pipe(

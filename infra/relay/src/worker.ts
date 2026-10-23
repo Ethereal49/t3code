@@ -354,25 +354,30 @@ export const layer = Api.make(
       allowEndpoint: allowWith(hookEndpointRateLimit),
     });
 
-    // Built here, once per isolate, so decoded maps outlive a request.
-    const mobileSourceMapLookups = yield* MobileTelemetry.makeSourceMaps((key) =>
-      mobileSourceMaps.get(key).pipe(
-        Effect.map((object) =>
-          object === null
-            ? undefined
-            : {
-                size: object.size,
-                text: object.text().pipe(
-                  Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-                  Effect.mapError(
-                    (cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }),
-                  ),
-                ),
-              },
-        ),
-        Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-        Effect.mapError((cause) => new MobileTelemetry.SourceMapObjectError({ key, cause })),
-      ),
+    // `fetch` below rebuilds its layers for every request, so the source map
+    // cache is built here, once per isolate, for decoded maps to outlive one.
+    const mobileSourceMapLookups = yield* MobileTelemetry.SourceMaps.pipe(
+      Effect.provide(MobileTelemetry.layerSourceMaps),
+      Effect.provideService(MobileTelemetry.SourceMapObjects, {
+        get: (key) =>
+          mobileSourceMaps.get(key).pipe(
+            Effect.map((object) =>
+              object === null
+                ? undefined
+                : {
+                    size: object.size,
+                    text: object.text().pipe(
+                      Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                      Effect.mapError(
+                        (cause) => new MobileTelemetry.SourceMapObjectError({ key, cause }),
+                      ),
+                    ),
+                  },
+            ),
+            Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+            Effect.mapError((cause) => new MobileTelemetry.SourceMapObjectError({ key, cause })),
+          ),
+      }),
     );
     const layerMobileTelemetry = MobileTelemetry.layer.pipe(
       Layer.provide(
