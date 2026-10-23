@@ -7,6 +7,7 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
+import { splitSearchText } from "@t3tools/shared/searchRank";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -79,7 +80,7 @@ function itemIcon(item: CommandPaletteItem): AppSymbolName {
 }
 
 function PaletteRow(props: {
-  readonly item: CommandPaletteItem;
+  readonly item: CommandPaletteResult;
   readonly index: number;
   readonly selected: boolean;
   readonly searchMatch?: EnvironmentThreadSearchMatch;
@@ -127,7 +128,16 @@ function PaletteRow(props: {
       </View>
       <View className="flex-1">
         <Text numberOfLines={1} className={cn("text-base", foregroundClassName)}>
-          {props.item.title}
+          {props.item.titleRanges?.length
+            ? splitSearchText(props.item.title, props.item.titleRanges).map((part) => (
+                <Text
+                  key={part.start}
+                  className={cn("text-base", part.highlighted && "font-t3-bold")}
+                >
+                  {part.text}
+                </Text>
+              ))
+            : props.item.title}
         </Text>
         {props.searchMatch ? (
           <ThreadSearchMatchExcerpt

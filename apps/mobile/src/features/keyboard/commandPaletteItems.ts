@@ -4,6 +4,7 @@ import {
   rankSearchGroups,
   scoreSearchTerms,
   scoreThreadSearch,
+  type SearchRange,
   type ThreadSearchSubject,
 } from "@t3tools/shared/searchRank";
 
@@ -22,6 +23,8 @@ export interface CommandPaletteItem {
 export interface CommandPaletteResult extends CommandPaletteItem {
   /** Listed because its messages match; the row shows the message snippet. */
   readonly fromMessages?: boolean;
+  /** Title ranges the query matched, for highlighting. */
+  readonly titleRanges?: ReadonlyArray<SearchRange>;
 }
 
 const THREAD_RESULT_LIMIT = 20;
@@ -48,13 +51,16 @@ export function filterCommandPaletteItems(
   const kinds = ["action", "thread", "project"] as const;
   const ranked = rankSearchGroups(
     kinds.map((kind) => ({ group: kind, items: candidates.filter((item) => item.kind === kind) })),
-    (item, options) =>
-      item.threadSearch
-        ? scoreThreadSearch(normalizedQuery, item.threadSearch, now, options)
-        : scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options),
+    (item, options) => {
+      if (!item.threadSearch) {
+        return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
+      }
+      const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
+      return match && { ...match, ranges: match.titleRanges };
+    },
   ).flatMap(({ group, ranked: entries }) =>
     (group === "thread" ? entries.slice(0, THREAD_RESULT_LIMIT) : entries).map(
-      (entry) => entry.item,
+      ({ item, match }): CommandPaletteResult => ({ ...item, titleRanges: match.ranges }),
     ),
   );
   if (actionsOnly) return ranked;

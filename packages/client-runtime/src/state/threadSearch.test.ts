@@ -12,6 +12,7 @@ import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   threadSearchMatchKey,
+  visibleThreadSearch,
 } from "./threadSearch.ts";
 
 const envA = EnvironmentId.make("env-a");
@@ -99,4 +100,25 @@ it("merges successful environments and silently ignores failures", () => {
   expect(threadSearchMatchKey(state.matches[0]!)).toBe('["env-a","thread-a"]');
 
   registry.dispose();
+});
+
+it("keeps the previous results visible only while a refined or widened query is pending", () => {
+  const previous = {
+    query: "websock",
+    matches: [
+      {
+        environmentId: envA,
+        threadId: ThreadId.make("thread-a"),
+        projectId: ProjectId.make("project-a"),
+        source: "user" as const,
+        snippet: "websocket reconnect",
+        messageCreatedAt: null,
+      },
+    ],
+  };
+  expect(visibleThreadSearch("websocke", null, previous)).toBe(previous);
+  expect(visibleThreadSearch("webso", null, previous)).toBe(previous);
+  expect(visibleThreadSearch("billing", null, previous)).toEqual({ query: "", matches: [] });
+  const ready = { query: "websocke", matches: [] };
+  expect(visibleThreadSearch("websocke", ready, previous)).toBe(ready);
 });
