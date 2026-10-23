@@ -304,6 +304,7 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
         const project = ProjectId.make("project:scripts");
         const threadId = ThreadId.make("thread:scripts");
         const drafts = ThreadId.make("thread:drafts");
+        const addresses = ThreadId.make("thread:addresses");
         yield* createProject(project);
         yield* Effect.forEach(
           [
@@ -316,6 +317,8 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
             message(drafts, "drafts", "assistant", "saved two drafts and shifts"),
             message(threadId, "camel", "assistant", "Configure enableFTS today"),
             message(threadId, "accented", "user", "Review Résumé indexing"),
+            thread(addresses, project),
+            message(addresses, "addresses", "user", "This addresses Résumé indexing"),
           ],
           projections.apply,
           { discard: true },
@@ -326,9 +329,11 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
             .pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
 
         // Short words must start a word, which camelCase and accented words do.
-        for (const query of ["검색 기능", "がんばって", "部署", "fts", "res", "enable"]) {
+        for (const query of ["검색 기능", "がんばって", "部署", "fts", "enable"]) {
           assert.deepEqual(yield* threadIds(query), [threadId], query);
         }
+        // "res" inside "addresses" does not hide the accented word after it.
+        assert.sameMembers(yield* threadIds("res"), [threadId, addresses]);
         // Without the index (an SQLite build without FTS5 trigrams) search scans instead.
         yield* sql`DROP TABLE orchestration_v2_message_search`;
         assert.deepEqual(yield* threadIds("検索"), [threadId]);

@@ -176,6 +176,26 @@ function CommandPaletteTitle({
   );
 }
 
+/**
+ * Project and environment for a thread row whose second line shows a message
+ * snippet or match hint instead, so similar rows can still be told apart.
+ */
+function ThreadRowContext({
+  item,
+}: {
+  item: CommandPaletteActionItem | CommandPaletteSubmenuItem;
+}) {
+  if (!item.threadSearch || !(item.threadContentMatch || item.matchHint)) return null;
+  const context = [item.threadSearch.projectTitle, item.threadSearch.environmentLabel]
+    .filter(Boolean)
+    .join(" · ");
+  return context ? (
+    <span className="max-w-[45%] shrink-0 truncate text-muted-foreground/70 text-xs">
+      {context}
+    </span>
+  ) : null;
+}
+
 function DisabledCommandPaletteResultRow(props: {
   item: CommandPaletteActionItem | CommandPaletteSubmenuItem;
 }) {
@@ -187,6 +207,7 @@ function DisabledCommandPaletteResultRow(props: {
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {props.item.titleLeadingContent}
             <CommandPaletteTitle item={props.item} />
+            <ThreadRowContext item={props.item} />
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
@@ -238,6 +259,7 @@ function CommandPaletteResultRow(props: {
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {props.item.titleLeadingContent}
             <CommandPaletteTitle item={props.item} />
+            <ThreadRowContext item={props.item} />
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />

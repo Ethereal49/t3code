@@ -135,18 +135,29 @@ function PaletteRow(props: {
         )}
       </View>
       <View className="flex-1">
-        <Text numberOfLines={1} className={cn("text-base", foregroundClassName)}>
-          {props.item.titleRanges?.length
-            ? splitSearchText(props.item.title, props.item.titleRanges).map((part) => (
-                <Text
-                  key={part.start}
-                  className={cn("text-base", part.highlighted && "font-t3-bold")}
-                >
-                  {part.text}
-                </Text>
-              ))
-            : props.item.title}
-        </Text>
+        <View className="flex-row items-baseline gap-2">
+          <Text numberOfLines={1} className={cn("shrink text-base", foregroundClassName)}>
+            {props.item.titleRanges?.length
+              ? splitSearchText(props.item.title, props.item.titleRanges).map((part) => (
+                  <Text
+                    key={part.start}
+                    className={cn("text-base", part.highlighted && "font-t3-bold")}
+                  >
+                    {part.text}
+                  </Text>
+                ))
+              : props.item.title}
+          </Text>
+          {/* The second line shows the snippet or hint, so keep where the thread lives. */}
+          {(props.searchMatch || props.item.matchHint) && props.item.detail ? (
+            <Text
+              numberOfLines={1}
+              className={cn("max-w-[45%] shrink-0 text-sm", mutedForegroundClassName)}
+            >
+              {props.item.detail}
+            </Text>
+          ) : null}
+        </View>
         {props.searchMatch ? (
           <ThreadSearchMatchExcerpt
             match={props.searchMatch}

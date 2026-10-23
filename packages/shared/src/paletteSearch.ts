@@ -240,16 +240,26 @@ function matchInitials(field: SearchField, token: string): TokenMatch | null {
     }
     return -1;
   };
-  const start = nextWordStart(0, token[0]!);
-  if (start === -1) return null;
-  const letters: SearchRange[] = [{ start, end: start + 1 }];
-  for (const letter of token.slice(1)) {
-    const after = letters.at(-1)!.end;
-    const at = field.text[after] === letter ? after : nextWordStart(after, letter);
-    if (at === -1) return null;
-    letters.push({ start: at, end: at + 1 });
+  const runFrom = (start: number) => {
+    const letters: SearchRange[] = [{ start, end: start + 1 }];
+    for (const letter of token.slice(1)) {
+      const after = letters.at(-1)!.end;
+      const at = field.text[after] === letter ? after : nextWordStart(after, letter);
+      if (at === -1) return null;
+      letters.push({ start: at, end: at + 1 });
+    }
+    return letters;
+  };
+  // "fis" in "Feature: Fix sidebar" starts at the second F.
+  for (
+    let start = nextWordStart(0, token[0]!);
+    start !== -1;
+    start = nextWordStart(start + 1, token[0]!)
+  ) {
+    const letters = runFrom(start);
+    if (letters) return { score: INITIALS, start, end: letters.at(-1)!.end, letters };
   }
-  return { score: INITIALS, start, end: letters.at(-1)!.end, letters };
+  return null;
 }
 
 interface WeightedSearchField {
@@ -378,16 +388,35 @@ export function messageTokenNeedsWordStart(token: string): boolean {
   return token.length < 4 && /^[a-z0-9]+$/.test(token);
 }
 
+// The first character of a word in `text`, as `foldSearchField` decides it.
+function startsWordAt(text: string, index: number): boolean {
+  if (index === 0) return true;
+  const previous = text[index - 1]!;
+  return (
+    !ALPHANUMERIC.test(previous) ||
+    (LOWERCASE.test(previous) && UPPERCASE.test(text[index]!)) ||
+    DIGIT.test(previous) !== DIGIT.test(text[index]!)
+  );
+}
+
 /**
- * Where the first message search token starts in `text`, or 0. Messages can be
- * long, so a plain lowercase search goes first; folding accents ("cafe" in
- * "café") only runs when that misses.
+ * Where the first message search token starts in `text`, or 0. A short token
+ * counts only where it starts a word, as on the server ("fts" in "Enable FTS",
+ * not in "drafts"). Messages can be long, so a plain lowercase search goes
+ * first; folding accents ("cafe" in "café") only runs when that misses.
  */
 export function firstSearchTokenOffset(text: string, query: string): number {
   const lowerText = text.toLowerCase();
-  const offsets = messageSearchTokens(query)
-    .long.map((token) => lowerText.indexOf(token))
-    .filter((index) => index !== -1);
+  const offsets = messageSearchTokens(query).long.flatMap((token) => {
+    for (
+      let index = lowerText.indexOf(token);
+      index !== -1;
+      index = lowerText.indexOf(token, index + 1)
+    ) {
+      if (!messageTokenNeedsWordStart(token) || startsWordAt(text, index)) return [index];
+    }
+    return [];
+  });
   if (offsets.length > 0) return Math.min(...offsets);
   // Folding is per character, so bound it for very long messages.
   return findSearchTokenRanges(text.slice(0, 20_000), query)[0]?.start ?? 0;
@@ -396,20 +425,26 @@ export function firstSearchTokenOffset(text: string, query: string): number {
 /**
  * Ranges of `text` that contain a long message search token, for message
  * snippets, ignoring case and accents. Shorter tokens would light up half the
- * snippet. Snippets vary per query, so they skip the field cache.
+ * snippet, and a short long token only counts where it starts a word.
+ * Snippets vary per query, so they skip the field cache.
  */
 export function findSearchTokenRanges(text: string, query: string): SearchRange[] {
-  const tokens = new Set(messageSearchTokens(query).long.map(foldSearchQuery));
+  const tokens = new Map(
+    messageSearchTokens(query).long.map(
+      (token) => [foldSearchQuery(token), messageTokenNeedsWordStart(token)] as const,
+    ),
+  );
   if (tokens.size === 0) return [];
   const field = foldSearchField(text);
   const ranges: SearchRange[] = [];
-  for (const token of tokens) {
-    for (
-      let index = field.text.indexOf(token);
-      index !== -1;
-      index = field.text.indexOf(token, index + token.length)
-    ) {
+  for (const [token, needsWordStart] of tokens) {
+    for (let index = field.text.indexOf(token); index !== -1;) {
+      if (needsWordStart && !field.wordStarts[index]) {
+        index = field.text.indexOf(token, index + 1);
+        continue;
+      }
       ranges.push({ start: index, end: index + token.length });
+      index = field.text.indexOf(token, index + token.length);
     }
   }
   return toSourceRanges(field, ranges);

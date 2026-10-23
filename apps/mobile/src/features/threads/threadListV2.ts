@@ -619,21 +619,24 @@ export function buildThreadListV2Items(input: {
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
+  const listedThreads = input.threads.filter(
+    (thread) =>
+      thread.archivedAt === null &&
+      thread.lineage.relationshipToParent !== "subagent" &&
+      (input.environmentId === null || thread.environmentId === input.environmentId) &&
+      (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
+  );
   // The same matches as the command palette, typo fallback included; the list keeps its order.
+  // Only listed threads are ranked: a hidden exact match must not turn typos off.
   const matchingThreads =
     query.length > 0
       ? new Set(
-          rankSearchItems(input.threads, (thread, options) =>
+          rankSearchItems(listedThreads, (thread, options) =>
             scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, options),
           ).map(({ item }) => item),
         )
       : null;
-  for (const thread of input.threads) {
-    if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
-    if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
-    if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
-      continue;
-    }
+  for (const thread of listedThreads) {
     if (
       matchingThreads !== null &&
       !matchingThreads.has(thread) &&

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   findSearchTokenRanges,
+  firstSearchTokenOffset,
   foldSearchQuery,
   rankMessageMatches,
   rankSearchGroups,
@@ -189,6 +190,9 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     const threads = [thread("Fix sidebar lag"), thread("Unrelated work")];
     expect(rankTitles("fsl", threads)).toEqual(["Fix sidebar lag"]);
     expect(rankTitles("fixsid", threads)).toEqual(["Fix sidebar lag"]);
+    expect(rankTitles("fis", [thread("Feature: Fix sidebar lag")])).toEqual([
+      "Feature: Fix sidebar lag",
+    ]);
     expect(scoreThreadSearch("fsl", threads[0]!, NOW, { typos: true })?.titleRanges).toEqual([
       { start: 0, end: 1 },
       { start: 4, end: 5 },
@@ -312,5 +316,12 @@ describe("findSearchTokenRanges", () => {
       { start: 3, end: 7 },
       { start: 8, end: 14 },
     ]);
+  });
+
+  it("places snippets and highlights a three-letter token only where it starts a word", () => {
+    const text = `Saved the drafts. ${"More notes. ".repeat(40)}Then enableFTS and Enable FTS.`;
+    expect(text.slice(firstSearchTokenOffset(text, "fts"))).toMatch(/^FTS and/);
+    expect(findSearchTokenRanges("drafts, enableFTS", "fts")).toEqual([{ start: 14, end: 17 }]);
+    expect(firstSearchTokenOffset("This addresses Résumé indexing", "res")).toBe(15);
   });
 });

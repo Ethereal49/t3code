@@ -47,6 +47,8 @@ const WordStart = Schema.Struct({
   camel: Schema.String,
   /** Accent-insensitive patterns, for hits the index matched through accents. */
   accented: Schema.Array(Schema.String),
+  /** Matches text with an accented form of a token letter, or null when none has one. */
+  accents: Schema.NullOr(Schema.String),
 });
 
 // Token lists bind as JSON arrays, so any number of them is one parameter.
@@ -99,17 +101,22 @@ function letterClass(letter: string): string {
 
 /**
  * How the server checks that a short ASCII `token` starts a word in a hit.
- * Most hits contain the token as typed, so cheap lowercase patterns come first;
- * the accent-aware ones, slow on long text, only run when it does not appear
- * as typed ("res" in "Résumé").
+ * Most hits contain the token as typed, so cheap lowercase patterns come first.
+ * The accent-aware ones are slow on long text, so they only run when the text
+ * has an accented form of a token letter ("res" in "This addresses Résumé").
  */
 function wordStart(token: string): typeof WordStart.Type {
   const caseless = (letter: string) => `[${letter}${letter.toUpperCase()}]`;
   const accentedWord = `${Array.from(token, letterClass).join("")}*`;
+  const accents = Array.from(token, (letter) => LETTER_FORMS[letter]?.slice(1) ?? "").join("");
+  const nonAscii = Array.from(new Set(`${accents}${accents.toUpperCase()}`))
+    .filter((letter) => letter.codePointAt(0)! > 0x7f)
+    .join("");
   return {
     word: token,
     camel: `*[a-z]${token[0]!.toUpperCase()}${Array.from(token.slice(1), caseless).join("")}*`,
     accented: [accentedWord, `*[^${WORD_CHARACTERS}]${accentedWord}`],
+    accents: nonAscii ? `*[${nonAscii}]*` : null,
   };
 }
 
@@ -261,12 +268,25 @@ export const make = Effect.gen(function* () {
                   lower(json_extract(messages.payload_json, '$.text')),
                   json_extract(token.value, '$.word')
                 ) > 0
-                THEN lower(json_extract(messages.payload_json, '$.text'))
+                AND (
+                  lower(json_extract(messages.payload_json, '$.text'))
                     GLOB json_extract(token.value, '$.word') || '*'
                   OR lower(json_extract(messages.payload_json, '$.text'))
                     GLOB '*[^a-z0-9]' || json_extract(token.value, '$.word') || '*'
                   OR json_extract(messages.payload_json, '$.text')
                     GLOB json_extract(token.value, '$.camel')
+                )
+                THEN 1
+                WHEN instr(
+                  lower(json_extract(messages.payload_json, '$.text')),
+                  json_extract(token.value, '$.word')
+                ) > 0
+                AND (
+                  json_extract(token.value, '$.accents') IS NULL
+                  OR NOT json_extract(messages.payload_json, '$.text')
+                    GLOB json_extract(token.value, '$.accents')
+                )
+                THEN 0
                 ELSE EXISTS (
                   SELECT 1 FROM json_each(token.value, '$.accented') AS pattern
                   WHERE json_extract(messages.payload_json, '$.text') GLOB pattern.value
