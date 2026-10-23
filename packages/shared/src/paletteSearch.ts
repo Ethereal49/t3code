@@ -720,9 +720,29 @@ function matchHint(
   for (const { label, text } of candidates) {
     if (!text) continue;
     const match = matchSearchFields(normalizedQuery, [{ value: text, weight: 1 }], { typos });
-    if (match) return { label, text, ranges: match.primaryRanges };
+    if (match) return hintNearMatch(label, text, match.primaryRanges);
   }
   return undefined;
+}
+
+// Rows show one line, so a long pull request title or branch is cut to start a
+// few characters before the match, at a word, as message snippets are.
+const HINT_LEAD = 12;
+function hintNearMatch(
+  label: string,
+  text: string,
+  ranges: ReadonlyArray<SearchRange>,
+): SearchMatchHint {
+  const first = ranges[0]?.start ?? 0;
+  if (first <= HINT_LEAD * 2) return { label, text, ranges };
+  let start = first - HINT_LEAD;
+  const space = text.indexOf(" ", start);
+  if (space !== -1 && space < first) start = space + 1;
+  return {
+    label,
+    text: `…${text.slice(start)}`,
+    ranges: ranges.map((range) => ({ start: range.start - start + 1, end: range.end - start + 1 })),
+  };
 }
 
 /**

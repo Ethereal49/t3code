@@ -151,6 +151,15 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       ranges: [{ start: 3, end: 10 }],
     });
     expect(scoreThreadSearch("trim", subject, NOW)?.hint).toBeUndefined();
+    // A long hint starts near the match, so one line shows it.
+    const long = thread("Wave 1F", {
+      pullRequests: [{ number: 15033, title: "perf: cheaper shell refreshes, fewer MCP payloads" }],
+    });
+    expect(scoreThreadSearch("mcp", long, NOW)?.hint).toEqual({
+      label: "PR",
+      text: "…fewer MCP payloads",
+      ranges: [{ start: 7, end: 10 }],
+    });
     // The words only drop out next to a linked number.
     expect(scoreThreadSearch("pr 12345", subject, NOW)).toBeNull();
   });
