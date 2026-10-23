@@ -3,9 +3,10 @@
  * the MCP thread search, so every surface puts the same thread first.
  *
  * A match scores by quality: a whole word beats a word prefix, which beats a
- * one-typo prefix, which beats a mid-word substring, which beats initials. Word starts include camelCase, kebab, path, and
- * letter/digit boundaries. Thread scores then multiply quality by how recently
- * and often the thread was used, within limits.
+ * one-typo prefix, which beats a mid-word substring, which beats initials.
+ * Word starts include camelCase, kebab, path, and letter/digit boundaries.
+ * Thread scores then multiply quality by how recently and often the thread
+ * was used, within limits.
  */
 
 import type { OrchestrationV2ThreadOpens } from "@t3tools/contracts";
@@ -22,16 +23,10 @@ const SYMBOL = /\p{So}/u;
 const APOSTROPHE = /['’]/;
 
 interface SearchField {
-  /** Case- and accent-folded text. */
+  /** Case- and accent-folded text, one UTF-16 unit per source unit. */
   readonly text: string;
   /** 1 where a word starts in `text`. */
   readonly wordStarts: Uint8Array;
-  /**
-   * The source string index of each folded character, for highlighting; null
-   * when every character maps to itself, as in plain ASCII.
-   */
-  readonly sourceIndex: Int32Array | null;
-  readonly sourceLength: number;
 }
 
 export interface SearchRange {
@@ -46,38 +41,22 @@ export interface SearchRange {
 const fieldCache = new Map<string, SearchField>();
 const FIELD_CACHE_LIMIT = 100_000;
 
-/**
- * Letters search spells out, in both cases, as titles fold them and the
- * message index stores them ("ß" as "ss"). Unicode does not decompose them
- * into a base letter and a mark.
- */
-export const SPELLED_OUT_LETTERS: Readonly<Record<string, string>> = {
-  ß: "ss",
-  ẞ: "ss",
-  æ: "ae",
-  Æ: "ae",
-  œ: "oe",
-  Œ: "oe",
-  ø: "o",
-  Ø: "o",
-  ł: "l",
-  Ł: "l",
-  đ: "d",
-  Đ: "d",
-};
-const SPELLED_OUT_LETTER = new RegExp(`[${Object.keys(SPELLED_OUT_LETTERS).join("")}]`, "gu");
-
-/**
- * `text` with the letters search spells out ("ß" as "ss"), as the message
- * index stores them, so a typed "straße" also finds "Strasse".
- */
-export function spellOutLetters(text: string): string {
-  return text.replace(SPELLED_OUT_LETTER, (letter) => SPELLED_OUT_LETTERS[letter] ?? letter);
+function foldCharacter(character: string): string {
+  return character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase().replace("ς", "σ");
 }
 
-function foldCharacter(character: string): string {
-  const folded = character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
-  return SPELLED_OUT_LETTERS[folded] ?? folded;
+/**
+ * `text` with case and accents folded one UTF-16 unit at a time, so offsets
+ * and word starts still read from `text` and highlights need no mapping. A
+ * letter that folds to more or less than one unit ("ß", "ﬁ") stays as it is.
+ */
+function foldInPlace(text: string): string {
+  return text
+    .replace(/[\u0080-\uffff]/g, (character) => {
+      const folded = foldCharacter(character);
+      return folded.length === 1 ? folded : character;
+    })
+    .toLowerCase();
 }
 
 // Chinese and Japanese text has no spaces, so each ideograph or kana starts a word.
@@ -126,38 +105,18 @@ function isWordStart(
 }
 
 function foldSearchField(source: string): SearchField {
-  let text = "";
-  const wordStarts: number[] = [];
-  const sourceIndex: number[] = [];
-  let identity = true;
-  let previous = "";
-  let beforePrevious = "";
-  let index = 0;
+  const wordStarts = new Uint8Array(source.length);
   const characters = Array.from(source);
+  let index = 0;
   for (const [position, character] of characters.entries()) {
-    const startsWord = isWordStart(
-      beforePrevious,
-      previous,
-      character,
-      characters[position + 1] ?? "",
-    );
-    const folded = foldCharacter(character);
-    identity &&= folded.length === 1 && character.length === 1;
-    for (let offset = 0; offset < folded.length; offset++) {
-      text += folded[offset];
-      wordStarts.push(offset === 0 && startsWord ? 1 : 0);
-      sourceIndex.push(index);
+    const previous = characters[position - 1] ?? "";
+    const next = characters[position + 1] ?? "";
+    if (isWordStart(characters[position - 2] ?? "", previous, character, next)) {
+      wordStarts[index] = 1;
     }
-    beforePrevious = previous;
-    previous = character;
     index += character.length;
   }
-  return {
-    text,
-    wordStarts: Uint8Array.from(wordStarts),
-    sourceIndex: identity ? null : Int32Array.from(sourceIndex),
-    sourceLength: source.length,
-  };
+  return { text: foldInPlace(source), wordStarts };
 }
 
 function prepareSearchField(source: string): SearchField {
@@ -174,14 +133,9 @@ function prepareSearchField(source: string): SearchField {
 }
 
 /** Folded, whitespace-collapsed query; empty when there is nothing to match. */
-// Quotes and backticks around a word, as in a copied "`sidebar`".
-const WRAPPING_QUOTES = /^["'`“”‘’]+|["'`“”‘’]+$/g;
-
 export function foldSearchQuery(query: string): string {
-  return Array.from(query, foldCharacter)
-    .join("")
+  return foldInPlace(query)
     .split(/\s+/)
-    .map((token) => token.replace(WRAPPING_QUOTES, ""))
     .filter((token) => token.length > 0)
     .join(" ");
 }
@@ -322,111 +276,76 @@ function matchToken(
 }
 
 /**
- * Whole words typed together: "vscode" is "VS Code", "fixuibug" is "Fix UI
- * bug". Every part is a whole word but the last, which may be a prefix. Kept
- * apart from initials, where two-letter runs would also find "l(akebed)
- * in t(he)" for "lint".
+ * `token` typed as the starts of consecutive words, from a word start: "fsl"
+ * is "Fix sidebar lag", "vscode" is "VS Code". `fits(length, whole)` says
+ * which runs may come before the last, which may be any prefix; `accepts`
+ * vets a full match. Longer runs are tried first.
  */
-function matchJoinedWords(field: SearchField, token: string): TokenMatch | null {
+function matchWordRuns(
+  field: SearchField,
+  token: string,
+  fits: (length: number, whole: boolean) => boolean,
+  accepts: (runs: ReadonlyArray<SearchRange>, whole: boolean) => boolean,
+): TokenMatch | null {
+  const runsFrom = (at: number, rest: string): SearchRange[] | null => {
+    const end = wordEnd(field, at);
+    for (let length = Math.min(rest.length, end - at); length > 0; length--) {
+      if (!field.text.startsWith(rest.slice(0, length), at)) continue;
+      if (length === rest.length) return [{ start: at, end: at + length }];
+      if (!fits(length, at + length === end)) continue;
+      let next = end;
+      while (next < field.text.length && !field.wordStarts[next]) next++;
+      const after = next < field.text.length ? runsFrom(next, rest.slice(length)) : null;
+      if (after) return [{ start: at, end: at + length }, ...after];
+    }
+    return null;
+  };
   for (let start = 0; start < field.text.length; start++) {
     if (!field.wordStarts[start] || field.text[start] !== token[0]) continue;
-    const letters: SearchRange[] = [];
-    let at = start;
-    let rest = token;
-    let lastWhole = false;
-    while (rest.length > 0 && at < field.text.length) {
-      const end = wordEnd(field, at);
-      const word = field.text.slice(at, end);
-      if (word.startsWith(rest)) {
-        letters.push({ start: at, end: at + rest.length });
-        lastWhole = rest.length === word.length;
-        rest = "";
-      } else if (rest.startsWith(word)) {
-        letters.push({ start: at, end });
-        rest = rest.slice(word.length);
-        at = end;
-        while (at < field.text.length && !field.wordStarts[at]) at++;
-      } else {
-        break;
-      }
-    }
-    // Short words before a short prefix are a coincidence inside a title
-    // ("inth" is not "in th(read)"), but not at its start ("t3co" is "T3
-    // Co(de)"), before three letters ("gomod"), or a whole word ("vscode").
-    const shortBefore = letters.slice(0, -1).some((range) => range.end - range.start < 3);
-    const atStart = start === field.wordStarts.indexOf(1);
-    const last = letters.at(-1);
-    const lastLong = last !== undefined && last.end - last.start >= 3;
-    if (
-      rest.length === 0 &&
-      letters.length > 1 &&
-      (lastWhole || lastLong || atStart || !shortBefore)
-    ) {
-      return { score: JOINED_WORDS, start, end: letters.at(-1)!.end, letters };
+    const runs = runsFrom(start, token);
+    const last = runs?.at(-1);
+    if (runs && last && runs.length > 1 && accepts(runs, last.end === wordEnd(field, last.start))) {
+      return { score: 0, start, end: last.end, letters: runs };
     }
   }
   return null;
 }
 
 /**
- * Initials and word-start runs: each next letter of `token` either directly
- * follows the last one or starts the next word, so "fsl" and "fixsid" find
- * "Fix sidebar lag", as in VS Code. Every run but the last is one letter or
- * a whole word. Scattered letters would find any long title ("cron" in
- * "creation"). Weakest match, tried last.
+ * Whole words typed together: "vscode" is "VS Code", "fixuibug" is "Fix UI
+ * bug". Every part is a whole word but the last. Short words before a short
+ * prefix are a coincidence inside a title ("inth" is not "in th(read)"), but
+ * not at its start ("t3co" is "T3 Co(de)"), before three letters ("gomod"),
+ * or a whole word ("vscode").
+ */
+function matchJoinedWords(field: SearchField, token: string): TokenMatch | null {
+  const match = matchWordRuns(
+    field,
+    token,
+    (_length, whole) => whole,
+    (runs, lastWhole) =>
+      lastWhole ||
+      runs.at(-1)!.end - runs.at(-1)!.start >= 3 ||
+      runs[0]!.start === field.wordStarts.indexOf(1) ||
+      runs.slice(0, -1).every((run) => run.end - run.start >= 3),
+  );
+  return match && { ...match, score: JOINED_WORDS };
+}
+
+/**
+ * Initials and word-start runs: "fsl" and "fixsid" find "Fix sidebar lag", as
+ * in VS Code. Every run but the last is one letter or a whole word of three or
+ * more ("lint" is not "Lin(k) t(hread)"). Weakest match, tried last.
  */
 function matchInitials(field: SearchField, token: string): TokenMatch | null {
   if (token.length < 3 || /^\p{N}+$/u.test(token)) return null;
-  const nextWordStart = (from: number, letter: string) => {
-    for (let index = from; index < field.text.length; index++) {
-      if (field.wordStarts[index] && field.text[index] === letter) return index;
-    }
-    return -1;
-  };
-  const followingWordStart = (from: number) => {
-    for (let index = from; index < field.text.length; index++) {
-      if (field.wordStarts[index]) return index;
-    }
-    return -1;
-  };
-  const runFrom = (start: number) => {
-    const letters: SearchRange[] = [{ start, end: start + 1 }];
-    let runStart = start;
-    for (const letter of token.slice(1)) {
-      const after = letters.at(-1)!.end;
-      // The very next word, not any later one: "fts" is not spread over nine.
-      const next = followingWordStart(after);
-      const at =
-        field.text[after] === letter
-          ? after
-          : next !== -1 && field.text[next] === letter
-            ? next
-            : -1;
-      if (at === -1) return null;
-      // Before the next word, a run is an initial or a whole word of three or
-      // more letters ("fix" in "fixsid"). Anything else is a coincidence:
-      // "lint" is not "Lin(k) t(hread)" or "l(akebed) in t(he)".
-      const run = after - runStart;
-      const endsWord =
-        after === field.text.length ||
-        field.wordStarts[after] === 1 ||
-        !ALPHANUMERIC.test(field.text[after]!);
-      if (at !== after && run > 1 && (run < 3 || !endsWord)) return null;
-      if (at !== after) runStart = at;
-      letters.push({ start: at, end: at + 1 });
-    }
-    return letters;
-  };
-  // "fixsid" in "Feature: Fix sidebar" starts at the second F.
-  for (
-    let start = nextWordStart(0, token[0]!);
-    start !== -1;
-    start = nextWordStart(start + 1, token[0]!)
-  ) {
-    const letters = runFrom(start);
-    if (letters) return { score: INITIALS, start, end: letters.at(-1)!.end, letters };
-  }
-  return null;
+  const match = matchWordRuns(
+    field,
+    token,
+    (length, whole) => length === 1 || (whole && length >= 3),
+    () => true,
+  );
+  return match && { ...match, score: INITIALS };
 }
 
 interface WeightedSearchField {
@@ -462,19 +381,15 @@ interface SearchFieldsMatch {
   readonly primaryRanges: ReadonlyArray<SearchRange>;
 }
 
-function toSourceRanges(field: SearchField, ranges: ReadonlyArray<SearchRange>): SearchRange[] {
+// Sorted, with overlapping ranges joined.
+function mergeRanges(ranges: ReadonlyArray<SearchRange>): SearchRange[] {
   const merged: SearchRange[] = [];
   for (const range of [...ranges].sort((left, right) => left.start - right.start)) {
-    const start = field.sourceIndex?.[range.start] ?? range.start;
-    const end =
-      range.end < field.text.length
-        ? (field.sourceIndex?.[range.end] ?? range.end)
-        : field.sourceLength;
     const last = merged.at(-1);
-    if (last && start <= last.end) {
-      merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, end) };
+    if (last && range.start <= last.end) {
+      merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, range.end) };
     } else {
-      merged.push({ start, end });
+      merged.push({ start: range.start, end: range.end });
     }
   }
   return merged;
@@ -535,7 +450,7 @@ function matchSearchFields(
   return {
     quality,
     strong,
-    primaryRanges: primary ? toSourceRanges(primary, primaryRanges) : [],
+    primaryRanges: mergeRanges(primaryRanges),
   };
 }
 
@@ -557,7 +472,6 @@ export function messageSearchTokens(query: string): {
     .normalize("NFC")
     .toLowerCase()
     .split(/\s+/)
-    .map((token) => token.replace(WRAPPING_QUOTES, ""))
     .filter((token) => token.length > 0);
   const searchable = (token: string) => {
     const length = Array.from(token).length;
@@ -569,70 +483,15 @@ export function messageSearchTokens(query: string): {
   };
 }
 
+const NON_ASCII = /[\u0080-\uffff]/;
 // A message token shorter than this must start a word: "fts" is not in "drafts".
 const MESSAGE_WORD_START_LENGTH = 4;
 const MESSAGE_PREFIX = 0.8;
-// Accented Latin letters by the letter they fold to: "e" -> "èéêë…".
-let accentedLettersCache: Map<string, string> | null = null;
-function accentedLetters(): Map<string, string> {
-  if (accentedLettersCache) return accentedLettersCache;
-  accentedLettersCache = new Map();
-  // Latin-1 Supplement, Extended-A and -B, and Extended Additional ("ế").
-  const codes = [
-    ...Array.from({ length: 0x24f - 0xc0 + 1 }, (_, offset) => 0xc0 + offset),
-    ...Array.from({ length: 0x1eff - 0x1e00 + 1 }, (_, offset) => 0x1e00 + offset),
-  ];
-  for (const code of codes) {
-    const character = String.fromCharCode(code);
-    const letter = foldCharacter(character);
-    if (/^[a-z]$/.test(letter)) {
-      accentedLettersCache.set(letter, (accentedLettersCache.get(letter) ?? "") + character);
-    }
-  }
-  return accentedLettersCache;
-}
-
-/**
- * Matches text that holds an accented form of a letter in `token`, or null
- * when no letter has one. Only such text can hold the token through accents
- * ("res" in "Résumé"), so only it is folded, which is slow on long text.
- */
-function accentedFormsOf(token: string): RegExp | null {
-  const forms = Array.from(new Set(token), (letter) => accentedLetters().get(letter) ?? "").join(
-    "",
-  );
-  return forms ? new RegExp(`[${forms}]`) : null;
-}
-
-// Whether a word ends right before `end` in `text`.
-function endsWordAt(text: string, end: number): boolean {
-  return end >= text.length || !ALPHANUMERIC.test(text[end]!) || startsWordAt(text, end);
-}
-
-const HEX = /[0-9a-f]/i;
-const HEX_ID_MIN_LENGTH = 7;
-
-/**
- * Whether `index` sits inside an ID such as a commit SHA or a UUID part: a
- * run of seven or more hex characters, hyphens allowed, holding both a digit
- * and a letter. Its digit-letter switches are not word starts in messages,
- * or "dec" would find "09dec823…" as a word. Titles keep them ("pnpm12").
- */
-function insideHexId(text: string, index: number): boolean {
-  if (!HEX.test(text[index - 1] ?? "") || !HEX.test(text[index] ?? "")) return false;
-  let start = index;
-  while (start > 0 && (HEX.test(text[start - 1]!) || text[start - 1] === "-")) start--;
-  let end = index;
-  while (end < text.length && (HEX.test(text[end]!) || text[end] === "-")) end++;
-  const run = text.slice(start, end).replaceAll("-", "");
-  return run.length >= HEX_ID_MIN_LENGTH && /\d/.test(run) && /[a-f]/i.test(run);
-}
 
 function startsWordAt(text: string, index: number): boolean {
   const character = text[index]!;
   // A token that opens with punctuation (".ts", "#22889") brings its own boundary.
   if (!ALPHANUMERIC.test(character) && !SYMBOL.test(character)) return true;
-  if (insideHexId(text, index)) return false;
   return isWordStart(
     text[index - 2] ?? "",
     text[index - 1] ?? "",
@@ -641,207 +500,68 @@ function startsWordAt(text: string, index: number): boolean {
   );
 }
 
+// Whether a word ends right before `end` in `text`.
+function endsWordAt(text: string, end: number): boolean {
+  return end >= text.length || !ALPHANUMERIC.test(text[end]!) || startsWordAt(text, end);
+}
+
+// Where `token` best sits in `folded`, a fold of `text`: a whole word, else a
+// word start, else inside a word.
+function findMessageToken(
+  text: string,
+  folded: string,
+  token: string,
+): { readonly at: number; readonly quality: number } | null {
+  let best: { readonly at: number; readonly quality: number } | null = null;
+  for (let index = folded.indexOf(token); index !== -1; index = folded.indexOf(token, index + 1)) {
+    if (!startsWordAt(text, index)) {
+      best ??= { at: index, quality: MID_WORD };
+    } else if (endsWordAt(text, index + token.length)) {
+      return { at: index, quality: 1 };
+    } else if (best === null || best.quality === MID_WORD) {
+      best = { at: index, quality: MESSAGE_PREFIX };
+    }
+  }
+  return best;
+}
+
 export interface MessageMatch {
   /**
    * 1 when every token is a whole word, MESSAGE_PREFIX when one only starts
    * a word ("mode" in "model"), MID_WORD when one only appears inside words.
    */
   readonly quality: number;
-  /** A token only appears inside words, so the match ranks below word matches. */
-  readonly midWord: boolean;
   /** Where a snippet should start to show the match. */
   readonly offset: number;
 }
 
 /**
  * How a message matches a query, so message hits rank like titles, or null
- * when a short token never starts a word in it ("fts" in "drafts"). Case and
- * accents are ignored, as in the server's index. Tokens too short for the
- * index ("12" in "pnpm 12") are the caller's to check.
+ * when a token is missing or a short one never starts a word ("fts" in
+ * "drafts"). Case and accents are ignored, as in the server's index.
  */
-// Accents written as separate combining marks ("e" + "\u0301").
-const HAS_MARK = /\p{M}/u;
-// Letters `foldCharacter` expands, which native normalization does not.
-const EXPANDING_LETTER = new RegExp(`[${Object.keys(SPELLED_OUT_LETTERS).join("")}]`, "u");
-
-/** `text` lowercased without changing its length, so offsets stay valid ("İ" grows). */
-function lowerCaseInPlace(text: string): string {
-  const lower = text.toLowerCase();
-  if (lower.length === text.length) return lower;
-  return Array.from(text, (character) => {
-    const folded = character.toLowerCase();
-    return folded.length === character.length ? folded : character;
-  }).join("");
-}
-
-interface FoldedMessage {
-  readonly text: string;
-  sourceAt(index: number): number;
-  startsWord(index: number): boolean;
-  endsWord(end: number): boolean;
-}
-
-/**
- * A message with case and accents folded, for matches the plain search
- * missed. Native normalization keeps one character per source character for
- * most text, so it folds a message of any length cheaply and word starts come
- * from the source. Text it would shift (decomposed accents, ligatures) is
- * folded character by character with source positions, ASCII taking a fast
- * path, so it also reads the whole message.
- */
-function foldMessage(text: string): FoldedMessage {
-  const native = text.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
-  // Marks already in the text, or letters that expand, could leave the length
-  // equal by chance while positions shift.
-  if (native.length === text.length && !HAS_MARK.test(text) && !EXPANDING_LETTER.test(text)) {
-    return {
-      text: native,
-      sourceAt: (index) => index,
-      startsWord: (index) => startsWordAt(text, index),
-      endsWord: (end) => endsWordAt(text, end),
-    };
-  }
-  let folded = "";
-  const sourceIndex: number[] = [];
-  for (let index = 0; index < text.length;) {
-    const code = text.charCodeAt(index);
-    if (code < 0x80) {
-      folded += code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : text[index];
-      sourceIndex.push(index);
-      index += 1;
-      continue;
-    }
-    const character = String.fromCodePoint(text.codePointAt(index)!);
-    for (const unit of foldCharacter(character).split("")) {
-      folded += unit;
-      sourceIndex.push(index);
-    }
-    index += character.length;
-  }
-  const sourceAt = (index: number) => sourceIndex[index] ?? text.length;
-  return {
-    text: folded,
-    sourceAt,
-    startsWord: (index) => startsWordAt(text, sourceAt(index)),
-    endsWord: (end) => end >= folded.length || endsWordAt(text, sourceAt(end)),
-  };
-}
-
-interface PreparedMessageQuery {
-  readonly query: string;
-  /** Every token, in order, as one phrase. */
-  readonly phrase: string;
-  readonly tooShort: ReadonlyArray<string>;
-  readonly tokens: ReadonlyArray<{
-    readonly token: string;
-    readonly foldedToken: string;
-    readonly short: boolean;
-    readonly accents: RegExp | null;
-  }>;
-}
-
-// The server scores up to thousands of hits for one query, so its tokens are
-// prepared once.
-let lastMessageQuery: PreparedMessageQuery | null = null;
-
-function prepareMessageQuery(query: string): PreparedMessageQuery {
-  if (lastMessageQuery?.query === query) return lastMessageQuery;
-  const { long, short } = messageSearchTokens(query);
-  lastMessageQuery = {
-    query,
-    phrase: query
-      .normalize("NFC")
-      .toLowerCase()
-      .split(/\s+/)
-      .map((token) => token.replace(WRAPPING_QUOTES, ""))
-      .filter((token) => token.length > 0)
-      .join(" "),
-    tooShort: short,
-    tokens: long.map((token) => ({
-      token,
-      foldedToken: foldSearchQuery(token),
-      short: Array.from(token).length < MESSAGE_WORD_START_LENGTH,
-      accents: accentedFormsOf(token),
-    })),
-  };
-  return lastMessageQuery;
-}
-
 export function scoreMessageMatch(text: string, query: string): MessageMatch | null {
-  const lowerText = lowerCaseInPlace(text);
-  let folded: FoldedMessage | null = null;
+  const { long, short } = messageSearchTokens(query);
+  const lower = text.toLowerCase();
+  // "İ" lowercases to two units, which would shift every offset after it.
+  const plain = lower.length === text.length ? lower : foldInPlace(text);
+  let folded: string | null = null;
   let quality = 1;
-  let offset = -1;
-  const prepared = prepareMessageQuery(query);
-  // Too short for the index, so the caller only checked them as substrings:
-  // "on" must start a word, not sit inside "connection".
-  for (const token of prepared.tooShort) {
-    let wordStart = -1;
-    for (
-      let index = lowerText.indexOf(token);
-      index !== -1;
-      index = lowerText.indexOf(token, index + 1)
-    ) {
-      if (!startsWordAt(text, index)) continue;
-      if (endsWordAt(text, index + token.length)) {
-        wordStart = index;
-        break;
-      }
-      if (wordStart === -1) wordStart = index;
+  let offset = text.length;
+  for (const token of [...long, ...short]) {
+    let found = findMessageToken(text, plain, token);
+    // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
+    if (found?.quality !== 1 && (NON_ASCII.test(text) || NON_ASCII.test(token))) {
+      found = findMessageToken(text, (folded ??= foldInPlace(text)), foldInPlace(token));
     }
-    if (wordStart === -1) return null;
-    // "ci" in "circle" or "12" in "123" only starts the word.
-    if (!endsWordAt(text, wordStart + token.length)) quality = MESSAGE_PREFIX;
-  }
-  for (const { token, foldedToken, short, accents } of prepared.tokens) {
-    let first = -1;
-    let wordStart = -1;
-    let wholeWord = -1;
-    for (
-      let index = lowerText.indexOf(token);
-      index !== -1 && wholeWord === -1;
-      index = lowerText.indexOf(token, index + 1)
-    ) {
-      if (first === -1) first = index;
-      if (!startsWordAt(text, index)) continue;
-      if (wordStart === -1) wordStart = index;
-      if (endsWordAt(text, index + token.length)) wholeWord = index;
+    if (found === null) return null;
+    if (found.quality === MID_WORD && Array.from(token).length < MESSAGE_WORD_START_LENGTH) {
+      return null;
     }
-    if (
-      foldedToken.length > 0 &&
-      (first === -1 ||
-        (wholeWord === -1 &&
-          (accents?.test(text) || HAS_MARK.test(text) || EXPANDING_LETTER.test(text))))
-    ) {
-      folded ??= foldMessage(text);
-      for (
-        let index = folded.text.indexOf(foldedToken);
-        index !== -1 && wholeWord === -1;
-        index = folded.text.indexOf(foldedToken, index + 1)
-      ) {
-        const source = folded.sourceAt(index);
-        if (first === -1) first = source;
-        if (!folded.startsWord(index)) continue;
-        if (wordStart === -1) wordStart = source;
-        if (folded.endsWord(index + foldedToken.length)) wholeWord = source;
-      }
-    }
-    // The index found every token, but folding can still miss one in text it
-    // reads only partly; without it there is no match to show.
-    if (first === -1 || (wordStart === -1 && short)) return null;
-    quality = Math.min(
-      quality,
-      wholeWord !== -1 ? 1 : wordStart !== -1 ? MESSAGE_PREFIX : MID_WORD,
-    );
-    const at = wholeWord !== -1 ? wholeWord : wordStart !== -1 ? wordStart : first;
-    if (at !== -1 && (offset === -1 || at < offset)) offset = at;
+    quality = Math.min(quality, found.quality);
+    offset = Math.min(offset, found.at);
   }
-  // Several words that also occur together show where they do.
-  if (prepared.tokens.length + prepared.tooShort.length > 1) {
-    const phrase = lowerText.indexOf(prepared.phrase);
-    if (phrase !== -1) offset = phrase;
-  }
-  return { quality, midWord: quality <= MID_WORD, offset: Math.max(offset, 0) };
+  return { quality, offset };
 }
 
 /**
@@ -875,7 +595,7 @@ export function findSearchTokenRanges(text: string, query: string): SearchRange[
       index = field.text.indexOf(token, index + token.length);
     }
   }
-  return toSourceRanges(field, ranges);
+  return mergeRanges(ranges);
 }
 
 export interface SearchTextPart {
@@ -1022,9 +742,9 @@ function matchReference(
 // not, so the groups hold still while a word is typed. It runs from the pick,
 // so an old pick lets go even if the thread is opened in other ways.
 const PICK_WINDOW_MS = 21 * DAY_MS;
-// A remembered pick alone lists its thread (one picked through a message
-// match, say), but two letters are too little to go on.
-const PICK_ONLY_MIN_LENGTH = 3;
+// The start of a picked query counts from three letters: "n" is too little to
+// go on, and would flip the group order between keystrokes.
+const PICK_PREFIX_MIN_LENGTH = 3;
 
 /** The latest pick of the thread for this query, while it lasts. */
 function activePick(
@@ -1034,9 +754,7 @@ function activePick(
 ): ThreadOpenStats["picks"][number] | undefined {
   // Stored picks are cut to a length, so compare the query cut the same way.
   const query = pickedQuery(normalizedQuery);
-  // The start of a picked query counts from three letters: "n" is too little
-  // to go on, and would flip the group order between keystrokes.
-  const prefix = query.length >= PICK_ONLY_MIN_LENGTH;
+  const prefix = query.length >= PICK_PREFIX_MIN_LENGTH;
   // The latest exact pick, else the latest pick the query starts.
   let exact: ThreadOpenStats["picks"][number] | undefined;
   let latest: ThreadOpenStats["picks"][number] | undefined;
@@ -1083,24 +801,6 @@ function searchableBranch(branch: string | null | undefined): string | null {
   return branch ? branch.replace(WORKTREE_BRANCH_PREFIX_PATTERN, "") : null;
 }
 
-const PULL_REQUEST_WORDS = new Set(["pr", "prs", "pull", "pulls", "request", "requests"]);
-
-/**
- * "pr 22889", "pr22889", and "pull request 22889" name a linked pull request:
- * once a token is one of its numbers, the words around it need not match.
- */
-function withoutPullRequestWords(normalizedQuery: string, thread: ThreadSearchSubject): string {
-  const numbers = new Set(
-    (thread.pullRequests ?? []).map((pullRequest) => `${pullRequest.number}`),
-  );
-  if (numbers.size === 0) return normalizedQuery;
-  const tokens = normalizedQuery
-    .split(" ")
-    .map((token) => token.replace(/^(?:#|pr|pull)(\d+)$/, "$1"));
-  if (!tokens.some((token) => numbers.has(token))) return normalizedQuery;
-  return tokens.filter((token) => !PULL_REQUEST_WORDS.has(token)).join(" ");
-}
-
 /** The first non-title field that holds the whole query, to explain the match. */
 function matchHint(
   normalizedQuery: string,
@@ -1116,43 +816,13 @@ function matchHint(
     { label: "Project", text: thread.projectTitle },
     { label: "Environment", text: thread.environmentLabel },
   ];
-  const rangesIn = (text: string, query: string) =>
-    matchSearchFields(query, [{ value: text, weight: 1 }], { typos })?.primaryRanges;
   for (const { label, text } of candidates) {
-    const ranges = text ? rangesIn(text, normalizedQuery) : undefined;
-    if (text && ranges) return hintNearMatch(label, text, ranges);
-  }
-  // A query split across fields ("cleanup payloads" in a branch and a PR
-  // title): the first field that holds some of its words.
-  const tokens = normalizedQuery.split(" ").filter((token) => token.length > 0);
-  if (tokens.length <= 1) return undefined;
-  for (const { label, text } of candidates) {
-    if (!text) continue;
-    const present = tokens.filter((token) => rangesIn(text, token));
-    const ranges = present.length > 0 ? rangesIn(text, present.join(" ")) : undefined;
-    if (ranges) return hintNearMatch(label, text, ranges);
+    const ranges = text
+      ? matchSearchFields(normalizedQuery, [{ value: text, weight: 1 }], { typos })?.primaryRanges
+      : undefined;
+    if (text && ranges) return { label, text, ranges };
   }
   return undefined;
-}
-
-// Rows show one line, so a long pull request title or branch is cut to start a
-// few characters before the match, at a word, as message snippets are.
-const HINT_LEAD = 12;
-function hintNearMatch(
-  label: string,
-  text: string,
-  ranges: ReadonlyArray<SearchRange>,
-): SearchMatchHint {
-  const first = ranges[0]?.start ?? 0;
-  if (first <= HINT_LEAD * 2) return { label, text, ranges };
-  let start = first - HINT_LEAD;
-  const space = text.indexOf(" ", start);
-  if (space !== -1 && space < first) start = space + 1;
-  return {
-    label,
-    text: `…${text.slice(start)}`,
-    ranges: ranges.map((range) => ({ start: range.start - start + 1, end: range.end - start + 1 })),
-  };
 }
 
 /**
@@ -1186,34 +856,24 @@ export function scoreThreadSearch(
   if (thread.environmentLabel) {
     fields.push({ value: thread.environmentLabel, weight: 0.25, context: true });
   }
-  const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
-  const pickedAt = pick?.at;
   // "#22889" and a pasted "t3/branch" search without their prefixes, as the
   // branch field is stored without the app's worktree prefix.
-  const fieldQuery = withoutPullRequestWords(normalizedQuery, thread)
+  const fieldQuery = normalizedQuery
     .replace(/^#\s*/, "")
     .replace(WORKTREE_BRANCH_PREFIX_PATTERN, "");
   const fieldMatch = matchSearchFields(fieldQuery, fields, options);
   const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
-  const pickOnly =
-    !fieldMatch &&
-    !referenceMatch &&
-    pickedAt !== undefined &&
-    normalizedQuery.length >= PICK_ONLY_MIN_LENGTH;
-  const match =
-    fieldMatch ??
-    referenceMatch ??
-    (pickOnly ? { quality: 0.5, strong: false, primaryRanges: [] } : null);
+  const match = fieldMatch ?? referenceMatch;
   if (match === null) return null;
+  const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
+  const pickedAt = pick?.at;
   const explain =
     match.primaryRanges.length > 0
       ? undefined
       : (): SearchMatchHint | undefined =>
           referenceMatch
             ? { label: "ID or link", text: normalizedQuery, ranges: [] }
-            : pickOnly
-              ? { label: "Picked before for", text: pick!.query, ranges: [] }
-              : matchHint(fieldQuery, thread, options?.typos ?? false);
+            : matchHint(fieldQuery, thread, options?.typos ?? false);
   return {
     score: match.quality * threadUsageBoost(thread, now),
     quality: match.quality,

@@ -131,7 +131,7 @@ import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { takeThreadOpen } from "@t3tools/client-runtime/state/thread-search";
+import { claimThreadOpen } from "@t3tools/client-runtime/state/thread-search";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
   clearThreadComposerError,
@@ -405,15 +405,15 @@ function ThreadVisitWatermark(props: {
   const wakeIsLatestUpdate = selectedThreadUpdatedAt === selectedThreadWokeAt;
   const selectedThreadLastVisitedAt = thread.lastVisitedAt;
   const selectedThreadCompletedAt = thread.latestRun?.completedAt;
-  // Opening a thread is one visit that also counts toward search ranking, with
-  // the query when the palette picked it; the watermark effect below skips it.
+  // Opening a thread is one visit that also counts toward search ranking; a
+  // palette pick already sent it with the query. The watermark effect below
+  // skips it.
   const recordedOpenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!showContent || selectedThreadLastVisitedAt === undefined) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
-    const open = takeThreadOpen(props.environmentId, selectedThreadId, Date.now());
-    if (!open.send) return;
+    if (!claimThreadOpen(props.environmentId, selectedThreadId, Date.now())) return;
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
     void visitThread({
@@ -422,7 +422,6 @@ function ThreadVisitWatermark(props: {
         threadId: selectedThreadId,
         visitedAt: selectedThreadUpdatedAt,
         opened: true,
-        ...(open.searchQuery === undefined ? {} : { searchQuery: open.searchQuery }),
       },
     });
   }, [

@@ -25,12 +25,6 @@ const sentThreadOpens = new Map<string, number>();
 // When this client last opened each thread, sent or not, so recent threads
 // follow quick switches the server merges.
 const localThreadOpens = new Map<string, number>();
-// Palette picks waiting for the thread view they open, which sends the open
-// with the picked query: one owner for every open. A pick no view takes (the
-// navigation failed) lets go after a while.
-const PICK_HANDOFF_MS = 30_000;
-const pendingPicks = new Map<string, { readonly query: string; readonly at: number }>();
-
 /**
  * Records that this client opened a thread, and says whether to send the open
  * to the server now.
@@ -43,37 +37,6 @@ export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, 
   }
   sentThreadOpens.set(key, now);
   return true;
-}
-
-/**
- * Hands a palette pick's query to the thread view it opens. Picking the thread
- * that is already open mounts no view, so the palette sends that open itself.
- */
-export function handOffPick(
-  environmentId: EnvironmentId,
-  threadId: string,
-  query: string,
-  now: number,
-) {
-  pendingPicks.set(`${environmentId}:${threadId}`, { query, at: now });
-}
-
-/**
- * The thread view's open: whether to send it, and the query a palette pick
- * handed over. A pick is always sent, so the server records it even inside
- * an open it merges.
- */
-export function takeThreadOpen(
-  environmentId: EnvironmentId,
-  threadId: string,
-  now: number,
-): { readonly send: boolean; readonly searchQuery?: string } {
-  const key = `${environmentId}:${threadId}`;
-  const pick = pendingPicks.get(key);
-  pendingPicks.delete(key);
-  const searchQuery = pick && now - pick.at < PICK_HANDOFF_MS ? pick.query : undefined;
-  const claimed = claimThreadOpen(environmentId, threadId, now);
-  return searchQuery === undefined ? { send: claimed } : { send: true, searchQuery };
 }
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
@@ -191,56 +154,9 @@ export function threadSearchSubject(
   };
 }
 
-/** Message result keys in the order a search box last showed them for `query`. */
-export interface ShownOrder {
-  readonly query: string;
-  readonly keys: ReadonlyArray<string>;
-  /** How many of `keys` were on screen; only those hold their places. */
-  readonly shown: number;
-}
-
-/**
- * The order to show message results in: rows already shown for this query
- * keep their places and the rest go below them in rank order, so a slower
- * environment's answer never moves a row under the pointer or the keyboard
- * highlight. `shownCount` is how many rows the box shows now. Returns
- * `previous` when nothing changed, so it can sit in React state.
- */
-export function nextShownOrder(
-  previous: ShownOrder | null,
-  query: string,
-  ranked: ReadonlyArray<string>,
-  shownCount: number,
-): ShownOrder {
-  if (previous?.query !== query) {
-    return { query, keys: ranked, shown: Math.min(shownCount, ranked.length) };
-  }
-  const listed = new Set(ranked);
-  const kept = previous.keys.slice(0, previous.shown).filter((key) => listed.has(key));
-  const held = new Set(kept);
-  const keys = [...kept, ...ranked.filter((key) => !held.has(key))];
-  const shown = Math.min(Math.max(shownCount, kept.length), keys.length);
-  const unchanged =
-    shown === previous.shown &&
-    keys.length === previous.keys.length &&
-    keys.every((key, index) => key === previous.keys[index]);
-  return unchanged ? previous : { query, keys, shown };
-}
-
-/**
- * How many message rows a search box shows: half while slower environments
- * still answer, so their best matches find a place below the rows already
- * shown instead of past the end.
- */
-export function shownMessageCount(limit: number, complete: boolean): number {
-  return complete ? limit : Math.ceil(limit / 2);
-}
-
 export interface SettledThreadSearch {
   readonly query: string;
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
-  /** Every environment answered; otherwise slower ones may still add matches. */
-  readonly complete: boolean;
 }
 
 /**
@@ -262,5 +178,5 @@ export function visibleThreadSearch(
     before.length > 0 &&
     (current.startsWith(before) || before.startsWith(current))
     ? previous
-    : { query: "", matches: [], complete: true };
+    : { query: "", matches: [] };
 }

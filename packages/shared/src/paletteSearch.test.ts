@@ -218,23 +218,21 @@ describe("queries that fold to empty words", () => {
     expect(rankTitles("´´´", [thread("Fix sidebar lag")])).toEqual([]);
     expect(scoreSearchTerms("# fix", ["Fix sidebar"])).toBeNull();
     expect(findSearchTokenRanges("Fix sidebar", "´´´")).toEqual([]);
-    expect(scoreMessageMatch("Fix sidebar", "´´´")).not.toBeUndefined();
+    expect(scoreMessageMatch("Fix sidebar", "´´´")).toBeNull();
   });
 });
 
 describe("scoreThreadSearch beyond Latin text and titles", () => {
-  it("says which field matched when the title does not, and reads pull request phrasing", () => {
+  it("says which field matched when the title does not", () => {
     const subject = thread("Trim model lists", {
       branch: "t3/cleanup-payloads",
       pullRequests: [{ number: 22889, title: "Smaller MCP payloads" }],
     });
-    for (const query of ["pr 22889", "pr22889", "pull 22889", "pull request #22889"]) {
-      expect(scoreThreadSearch(foldSearchQuery(query), subject, NOW)?.explain?.(), query).toEqual({
-        label: "PR",
-        text: "#22889 Smaller MCP payloads",
-        ranges: [{ start: 1, end: 6 }],
-      });
-    }
+    expect(scoreThreadSearch("#22889", subject, NOW)?.explain?.()).toEqual({
+      label: "PR",
+      text: "#22889 Smaller MCP payloads",
+      ranges: [{ start: 1, end: 6 }],
+    });
     // The app's own worktree prefix is not part of what the branch says.
     expect(scoreThreadSearch("cleanup", subject, NOW)?.explain?.()).toEqual({
       label: "Branch",
@@ -242,23 +240,6 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
       ranges: [{ start: 0, end: 7 }],
     });
     expect(scoreThreadSearch("trim", subject, NOW)?.explain?.()).toBeUndefined();
-    // Split across fields, the hint shows the first field with some of the words.
-    expect(scoreThreadSearch("cleanup smaller", subject, NOW)?.explain?.()).toEqual({
-      label: "PR",
-      text: "#22889 Smaller MCP payloads",
-      ranges: [{ start: 7, end: 14 }],
-    });
-    // A long hint starts near the match, so one line shows it.
-    const long = thread("Wave 1F", {
-      pullRequests: [{ number: 15033, title: "perf: cheaper shell refreshes, fewer MCP payloads" }],
-    });
-    expect(scoreThreadSearch("mcp", long, NOW)?.explain?.()).toEqual({
-      label: "PR",
-      text: "…fewer MCP payloads",
-      ranges: [{ start: 7, end: 10 }],
-    });
-    // The words only drop out next to a linked number.
-    expect(scoreThreadSearch("pr 12345", subject, NOW)).toBeNull();
   });
 
   it("reads letters and numbers typed together, without forgiving typos in numbers", () => {
@@ -287,12 +268,10 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
     expect(rankTitles("inth", [thread("Show skill names in thread overview")])).toEqual([]);
     expect(rankTitles("tos", [thread("Move Client State to Server")])).toEqual([]);
     expect(rankTitles("t3co", [thread("T3 Code vs Gemini")])).toEqual(["T3 Code vs Gemini"]);
-    expect(rankTitles('"sidebar"', [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
     // Three letters of the last word are enough, as it is typed.
     expect(rankTitles("gomod", [thread("Migrate to Go modules")])).toEqual([
       "Migrate to Go modules",
     ]);
-    expect(rankTitles("strasse", [thread("Straße bauen")])).toEqual(["Straße bauen"]);
     // Joined words beat an earlier match inside a word.
     expect(scoreThreadSearch("vscode", thread("Fixvscode and VS Code"), NOW)?.quality).toBe(0.6);
     // A strong match elsewhere does not hide joined words.
@@ -321,21 +300,6 @@ describe("scoreThreadSearch beyond Latin text and titles", () => {
   it("treats each Chinese or Japanese character as a word start", () => {
     expect(scoreThreadSearch("搜索", thread("实现全文搜索"), NOW)).not.toBeNull();
     expect(scoreThreadSearch("検索", thread("新しい検索機能"), NOW)).not.toBeNull();
-  });
-
-  it("lists a thread picked for a query even when only its messages matched", () => {
-    const picked = thread("Hosting alternatives", {
-      opens: { openedAt: NOW - DAY, score: 1, picks: [{ query: "tigris", at: NOW - DAY }] },
-    });
-    expect(rankTitles("tig", [picked, thread("Unrelated")])).toEqual(["Hosting alternatives"]);
-    expect(scoreThreadSearch("tig", picked, NOW)?.explain?.()).toEqual({
-      label: "Picked before for",
-      text: "tigris",
-      ranges: [],
-    });
-    // Off where a pick would show up unexplained.
-    expect(scoreThreadSearch("tig", picked, NOW, { picks: false })).toBeNull();
-    expect(rankTitles("ti", [picked])).toEqual([]);
   });
 });
 
@@ -629,33 +593,15 @@ describe("scoreMessageMatch", () => {
     expect(fts?.quality).toBe(1);
     expect(text.slice(fts?.offset)).toMatch(/^FTS and/);
     expect(scoreMessageMatch("saved two drafts", "fts")).toBeNull();
-    expect(scoreMessageMatch("We trust the build", "rust")).toEqual({
-      quality: 0.3,
-      midWord: true,
-      offset: 4,
-    });
-    expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({
-      quality: 1,
-      midWord: false,
-      offset: 0,
-    });
+    expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
+    expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
     // A whole word beats a word prefix: "mode" prefers "mode" over "model".
     expect(scoreMessageMatch("model settings", "mode")?.quality).toBe(0.8);
     expect(scoreMessageMatch("The model and the mode switch", "mode")).toEqual({
       quality: 1,
-      midWord: false,
       offset: 18,
     });
     expect(scoreMessageMatch("v12rc build", "rc")?.quality).toBe(1);
-    // IDs are not words: "dec" is not in a commit SHA or a UUID part.
-    expect(scoreMessageMatch("merged 09dec823da0b29 today", "dec")).toBeNull();
-    expect(scoreMessageMatch("id 3C1A8FAC-41D5-4F2A", "fac")).toBeNull();
-    expect(scoreMessageMatch("cafe 7cafe52bb8", "cafe")).toMatchObject({ quality: 1, offset: 0 });
-    // Quotes around a query word, and phrases shown where the words meet.
-    expect(scoreMessageMatch("use the sidebar", "`sidebar`")).toMatchObject({ offset: 8 });
-    expect(
-      scoreMessageMatch("I opened the dev build, then the dev server", "dev server"),
-    ).toMatchObject({ offset: 33 });
     expect(scoreMessageMatch("Fix the CLIAdapter state", "ada")?.quality).toBe(0.8);
     // Words too short for the index must start a word too.
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
@@ -683,31 +629,15 @@ describe("scoreMessageMatch", () => {
       offset: 16,
     });
     expect(scoreMessageMatch("明天部署到生产环境", "部署")).toMatchObject({ offset: 2 });
-    // Folding reaches past any length, and covers Vietnamese and combining accents.
-    const long = `${"plain ".repeat(4000)}Résumé indexing`;
-    expect(scoreMessageMatch(long, "res")).toMatchObject({ offset: 24_000 });
+    // Vietnamese and combining accents fold too.
     expect(scoreMessageMatch("Properties: tiếng Việt support", "tie")).toMatchObject({
       offset: 12,
     });
     expect(scoreMessageMatch("Properties: tie\u0301ng support", "tie")).toMatchObject({
       offset: 12,
     });
-    // Text with a decomposed accent anywhere is folded to its end too.
-    const decomposed = `e\u0301 ${"plain ".repeat(4000)}Résumé indexing`;
-    expect(scoreMessageMatch(decomposed, "res")).toMatchObject({ offset: 24_003 });
-    // A ligature and a decomposed accent that leave the length equal by chance.
-    expect(
-      scoreMessageMatch("\ufb01x then Résumé driven, later cafe\u0301 stuff", "res"),
-    ).toMatchObject({ offset: 8 });
-    expect(scoreMessageMatch("Die Straße ist lang", "strasse")).toMatchObject({ offset: 4 });
-    // Spelled-out letters win over a plain fragment earlier in the message.
-    expect(scoreMessageMatch("bloeuf œuf", "oeu")).toMatchObject({ offset: 7 });
-    expect(scoreMessageMatch("xstrasse then Straße", "strasse")).toMatchObject({
-      quality: 1,
-      offset: 14,
-    });
     // A letter that grows when lowercased does not shift later offsets.
     expect(scoreMessageMatch("İ Enable fts and model", "fts")).toMatchObject({ offset: 9 });
-    expect(scoreMessageMatch("İ Enable fts and model", "model")?.midWord).toBe(false);
+    expect(scoreMessageMatch("İ Enable fts and model", "model")?.quality).toBe(1);
   });
 });

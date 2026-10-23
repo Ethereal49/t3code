@@ -141,7 +141,7 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       for (const match of ['"needle"', null]) {
         const plan = yield* sql<{
           readonly detail: string;
-        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null, excludedThreadIds: "[]" })}`;
+        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null })}`;
         assert.isFalse(
           plan.some((row) => row.detail.includes("TEMP B-TREE")),
           plan.map((row) => row.detail).join("\n"),
@@ -269,41 +269,6 @@ it.layer(layerTest)("ThreadSearch", (it) => {
 });
 
 it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
-  it.effect("finds older words when the newest hits only hold the fragment inside words", () =>
-    Effect.gen(function* () {
-      const projections = yield* ProjectionStore.ProjectionStoreV2;
-      const search = yield* ThreadSearch.ThreadSearch;
-      const project = ProjectId.make("project:fragments");
-      yield* createProject(project);
-      const older = [
-        ["start", "Ingest the logs first"],
-        ["newline", "Plan:\ningest the logs"],
-        ["paren", "Run the job (ingest only)"],
-        ["space", "Then ingest the logs"],
-      ] as const;
-      const busy = ThreadId.make("thread:fragment-busy");
-      yield* Effect.forEach(
-        [
-          ...older.flatMap(([key, text]) => [
-            thread(ThreadId.make(`thread:fragment-${key}`), project),
-            message(ThreadId.make(`thread:fragment-${key}`), `fragment-${key}`, "user", text),
-          ]),
-          thread(busy, project),
-          ...Array.from({ length: 2000 }, (_, index) =>
-            message(busy, `fragment-busy-${index}`, "assistant", "still working on it"),
-          ),
-        ],
-        projections.apply,
-        { discard: true },
-      );
-      const { matches } = yield* search.search({ query: "ing" });
-      assert.sameMembers(
-        matches.map((match) => match.threadId),
-        older.map(([key]) => ThreadId.make(`thread:fragment-${key}`)),
-      );
-    }),
-  );
-
   it.effect("orders message matches by when they were written, not by row order", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -398,69 +363,6 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
-  it.effect("recovers an older word after a backslash behind newer hits inside words", () =>
-    Effect.gen(function* () {
-      const projections = yield* ProjectionStore.ProjectionStoreV2;
-      const search = yield* ThreadSearch.ThreadSearch;
-      const project = ProjectId.make("project:windows");
-      yield* createProject(project);
-      const windows = ThreadId.make("thread:windows-path");
-      const darwin = ThreadId.make("thread:darwin");
-      yield* Effect.forEach(
-        [
-          thread(windows, project),
-          message(windows, "windows-path", "user", "Inspect C:\\Windows\\Temp"),
-          thread(darwin, project),
-          ...Array.from({ length: 2000 }, (_, index) =>
-            message(darwin, `darwin-${index}`, "assistant", "on Darwin hosts"),
-          ),
-        ],
-        projections.apply,
-        { discard: true },
-      );
-      const { matches } = yield* search.search({ query: "win" });
-      assert.deepEqual(
-        matches.map((match) => match.threadId),
-        [windows],
-      );
-    }),
-  );
-
-  it.effect("finds an older word when one busy thread fills the newest hits", () =>
-    Effect.gen(function* () {
-      const projections = yield* ProjectionStore.ProjectionStoreV2;
-      const search = yield* ThreadSearch.ThreadSearch;
-      const project = ProjectId.make("project:busy-word");
-      yield* createProject(project);
-      const older = ThreadId.make("thread:rust-word");
-      const busy = ThreadId.make("thread:rustling");
-      const busier = ThreadId.make("thread:rustling-more");
-      // Two busy threads take a read each before the older word comes up.
-      yield* Effect.forEach(
-        [
-          thread(older, project),
-          message(older, "rust-word", "user", "Rust migration rationale"),
-          thread(busy, project),
-          ...Array.from({ length: 2000 }, (_, index) =>
-            message(busy, `rustling-${index}`, "assistant", "rustling leaves outside"),
-          ),
-          thread(busier, project),
-          ...Array.from({ length: 2000 }, (_, index) =>
-            message(busier, `rustling-more-${index}`, "assistant", "rustling leaves again"),
-          ),
-        ],
-        projections.apply,
-        { discard: true },
-      );
-      const { matches } = yield* search.search({ query: "rust" });
-      assert.deepEqual(matches[0]?.threadId, older);
-      assert.sameMembers(
-        matches.map((match) => match.threadId),
-        [older, busy, busier],
-      );
-    }),
-  );
-
   it.effect("finds a visible match behind hundreds of hidden or narrower hits", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -526,7 +428,6 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
             message(threadId, "accented", "user", "Review Résumé indexing"),
             thread(addresses, project),
             message(addresses, "addresses", "user", "This addresses Résumé indexing"),
-            message(threadId, "spelled", "user", "Die Straße ist lang"),
           ],
           projections.apply,
           { discard: true },
@@ -540,9 +441,6 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
         for (const query of ["검색 기능", "がんばって", "部署", "fts", "enable"]) {
           assert.deepEqual(yield* threadIds(query), [threadId], query);
         }
-        // Letters the index spells out match either way they are typed.
-        assert.deepEqual(yield* threadIds("strasse"), [threadId]);
-        assert.deepEqual(yield* threadIds("straße"), [threadId]);
         // "res" inside "addresses" does not hide the accented word after it.
         assert.sameMembers(yield* threadIds("res"), [threadId, addresses]);
         // A word beats the same letters inside a longer word, even in an older message.
@@ -654,13 +552,6 @@ it.effect("starts snippets a few words before the match so one line shows it", (
       snippet(`x${"🚀".repeat(200)}needle`, "needle"),
       /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
     );
-    // Links read as their text and emphasis marks go, unless the match is in the address.
-    assert.equal(
-      ThreadSearch.buildSearchSnippet("See **the** [onboarding notes](https://x.dev/a) now", 0),
-      "See the onboarding notes now",
-    );
-    const inUrl = "Open [notes](https://porpoise.dev/a) now";
-    assert.match(ThreadSearch.buildSearchSnippet(inUrl, inUrl.indexOf("porpoise")), /porpoise/);
     // Short text still moves a late match into view.
     assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
   }),

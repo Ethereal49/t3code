@@ -2,17 +2,12 @@ import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
   claimThreadOpen,
-  handOffPick,
-  nextShownOrder,
-  shownMessageCount,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
-  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
   foldSearchQuery,
-  PALETTE_MESSAGE_LIMIT,
   rankMessageMatches,
   splitSearchText,
   pickedQuery,
@@ -426,7 +421,7 @@ export function CommandPalette(props: {
     selectThreadRoute,
     threads,
   ]);
-  const rankedMessageKeys = useMemo(() => {
+  const messageMatchKeys = useMemo(() => {
     const subjectByKey = new Map(
       items.flatMap((item) => (item.threadSearch ? [[item.key, item.threadSearch] as const] : [])),
     );
@@ -439,15 +434,6 @@ export function CommandPalette(props: {
       now,
     ).map(keyOf);
   }, [items, now, query, search.matches]);
-  // Rows already shown keep their places when a slower environment answers.
-  const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
-  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, search.complete);
-  const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys, shownCount);
-  if (messageOrder !== shownOrder) setShownOrder(messageOrder);
-  const messageMatchKeys = useMemo(
-    () => (search.complete ? messageOrder.keys : messageOrder.keys.slice(0, shownCount)),
-    [messageOrder.keys, search.complete, shownCount],
-  );
   const results = useMemo(() => {
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
     // Recent threads leave out the open one, which would always lead them.
@@ -456,8 +442,6 @@ export function CommandPalette(props: {
       : null;
     return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
   }, [activeThread, items, messageMatchKeys, now, query]);
-  // The thread view sends the open with the picked query. The open thread
-  // mounts no view, so its pick is sent here.
   const runResult = (item: CommandPaletteResult) => {
     const thread =
       item.kind === "thread" && query.trim() && !query.startsWith(">")
@@ -465,19 +449,19 @@ export function CommandPalette(props: {
             (candidate) => scopedThreadKey(candidate.environmentId, candidate.id) === item.key,
           )
         : undefined;
+    // A pick sends its open with the query, always, so the server records it;
+    // the thread screen then skips its own open.
     if (thread && thread.lastVisitedAt !== undefined) {
-      const searchQuery = pickedQuery(query);
-      const isOpen =
-        activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
-      if (isOpen) {
-        claimThreadOpen(thread.environmentId, thread.id, Date.now());
-        void visitThread({
-          environmentId: thread.environmentId,
-          input: { threadId: thread.id, visitedAt: thread.updatedAt, opened: true, searchQuery },
-        });
-      } else {
-        handOffPick(thread.environmentId, thread.id, searchQuery, Date.now());
-      }
+      claimThreadOpen(thread.environmentId, thread.id, Date.now());
+      void visitThread({
+        environmentId: thread.environmentId,
+        input: {
+          threadId: thread.id,
+          visitedAt: thread.updatedAt,
+          opened: true,
+          searchQuery: pickedQuery(query),
+        },
+      });
     }
     item.run();
   };

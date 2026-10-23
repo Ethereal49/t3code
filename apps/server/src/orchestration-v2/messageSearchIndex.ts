@@ -1,4 +1,3 @@
-import { SPELLED_OUT_LETTERS } from "@t3tools/shared/paletteSearch";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
@@ -20,20 +19,6 @@ export const indexedMessageCondition = (sql: SqlClient.SqlClient) => sql`
 `;
 
 /**
- * What the index stores for a message: its text after a space, so a word
- * after a boundary also finds the first word, with the letters search spells
- * out ("ß" as "ss"). Migration 69's triggers use it too, so changing it needs
- * a new migration that rebuilds them. `payload` is the message's JSON column.
- */
-export const indexedMessageText = (sql: SqlClient.SqlClient, payload: string) =>
-  sql.literal(
-    `' ' || ${Object.entries(SPELLED_OUT_LETTERS).reduce(
-      (text, [letter, spelled]) => `replace(${text}, '${letter}', '${spelled}')`,
-      `json_extract(${payload}, '$.text')`,
-    )}`,
-  );
-
-/**
  * Refills the search index from the messages table. The index is keyed by
  * message rowid, so anything that may renumber or copy rows (VACUUM, a dev
  * database copy) rebuilds it instead of trusting it. Databases from before
@@ -52,7 +37,7 @@ export const rebuildMessageSearch = Effect.fn("MessageSearchIndex.rebuild")(func
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT messages.rowid, ${indexedMessageText(sql, "messages.payload_json")}
+    SELECT messages.rowid, json_extract(messages.payload_json, '$.text')
     FROM orchestration_v2_projection_messages AS messages
     WHERE ${indexedMessageCondition(sql)}
       AND json_extract(messages.payload_json, '$.text') IS NOT NULL

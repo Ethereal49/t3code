@@ -12,9 +12,6 @@ import {
   claimThreadOpen,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
-  handOffPick,
-  nextShownOrder,
-  takeThreadOpen,
   threadSearchMatchKey,
   threadSearchSubject,
   visibleThreadSearch,
@@ -110,7 +107,6 @@ it("merges successful environments and silently ignores failures", () => {
 it("keeps the previous results visible only while a refined or widened query is pending", () => {
   const previous = {
     query: "websock",
-    complete: true,
     matches: [
       {
         environmentId: envA,
@@ -124,12 +120,8 @@ it("keeps the previous results visible only while a refined or widened query is 
   };
   expect(visibleThreadSearch("websocke", null, previous)).toBe(previous);
   expect(visibleThreadSearch("webso", null, previous)).toBe(previous);
-  expect(visibleThreadSearch("billing", null, previous)).toEqual({
-    query: "",
-    matches: [],
-    complete: true,
-  });
-  const ready = { query: "websocke", matches: [], complete: true };
+  expect(visibleThreadSearch("billing", null, previous)).toEqual({ query: "", matches: [] });
+  const ready = { query: "websocke", matches: [] };
   expect(visibleThreadSearch("websocke", ready, previous)).toBe(ready);
 });
 
@@ -184,26 +176,4 @@ it("sends one open per thread every ten minutes by this client's clock", () => {
   expect(claimThreadOpen(envA, "thread-open", 9 * minute)).toBe(false);
   expect(claimThreadOpen(envB, "thread-open", 9 * minute)).toBe(true);
   expect(claimThreadOpen(envA, "thread-open", 10 * minute)).toBe(true);
-});
-
-it("keeps shown message rows in place when a slower environment answers", () => {
-  // The fast environment answers first; half the rows show while one is pending.
-  const first = nextShownOrder(null, "needle", ["a1", "a2", "a3", "a4"], 2);
-  expect(first.keys.slice(0, first.shown)).toEqual(["a1", "a2"]);
-  // The slow one ranks above: shown rows hold, the rest fill by rank.
-  const second = nextShownOrder(first, "needle", ["b1", "a1", "b2", "a2", "a3", "a4"], 4);
-  expect(second.keys.slice(0, second.shown)).toEqual(["a1", "a2", "b1", "b2"]);
-  expect(nextShownOrder(second, "needle", ["b1", "a1", "b2", "a2", "a3", "a4"], 4)).toBe(second);
-  // A new query starts from its own ranking.
-  expect(nextShownOrder(second, "needles", ["b1", "a1"], 4).keys).toEqual(["b1", "a1"]);
-});
-
-it("hands a palette pick's query to the thread view's open, once and while fresh", () => {
-  handOffPick(envA, "thread-picked", "upl", 0);
-  expect(takeThreadOpen(envA, "thread-picked", 1_000)).toEqual({ send: true, searchQuery: "upl" });
-  // Taken once; a second open within ten minutes is not sent.
-  expect(takeThreadOpen(envA, "thread-picked", 2_000)).toEqual({ send: false });
-  // A pick no view took in time lets go.
-  handOffPick(envA, "thread-stale", "upl", 0);
-  expect(takeThreadOpen(envA, "thread-stale", 60_000)).toEqual({ send: true });
 });

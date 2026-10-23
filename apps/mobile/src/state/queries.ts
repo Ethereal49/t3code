@@ -170,8 +170,6 @@ export function useThreadSearch(
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   /** The query `matches` are for, which lags the typed one while a search runs. */
   readonly query: string;
-  /** Every environment answered for `query`. */
-  readonly complete: boolean;
   readonly isPending: boolean;
 } {
   // A pasted wall of text searches by its start rather than failing the request.
@@ -187,21 +185,21 @@ export function useThreadSearch(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearchResultsAtom(searchKey),
   );
   const isPending = canSearch && (normalizedQuery !== debouncedQuery || result.isLoading);
-  // Show what fast environments returned rather than wait for a slow one.
+  // Results show once every environment answered, so rows never move under
+  // the pointer when a slower one arrives.
   const ready =
-    settledQuery !== null && (!result.isLoading || result.matches.length > 0)
-      ? { query: settledQuery, matches: result.matches, complete: !result.isLoading }
+    settledQuery !== null && !result.isLoading
+      ? { query: settledQuery, matches: result.matches }
       : null;
   // Kept from earlier renders: React's pattern for information from previous renders.
   const [previous, setPrevious] = useState<SettledThreadSearch | null>(null);
   if (ready !== null && previous?.matches !== ready.matches) setPrevious(ready);
   const visible = canSearch
     ? visibleThreadSearch(normalizedQuery, ready, previous)
-    : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES, complete: true };
+    : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES };
   return {
     matches: visible.matches,
     query: visible.query,
-    complete: visible.complete,
     isPending,
   };
 }

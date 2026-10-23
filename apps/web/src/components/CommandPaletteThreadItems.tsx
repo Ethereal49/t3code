@@ -2,16 +2,11 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import { requestThreadFindQuery } from "./chat/threadFindActionBus";
 import {
   claimThreadOpen,
-  handOffPick,
-  nextShownOrder,
-  shownMessageCount,
   type EnvironmentThreadSearchMatch,
-  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   foldSearchQuery,
   messageSearchTokens,
-  PALETTE_MESSAGE_LIMIT,
   pickedQuery,
   rankMessageMatches,
 } from "@t3tools/shared/paletteSearch";
@@ -150,25 +145,23 @@ export function useCommandPaletteThreadItems(input: {
       );
     },
     runThread: async (thread) => {
-      // The thread view sends the open with the picked query. The open thread
-      // mounts no view, so its pick is sent here.
+      // A pick sends its open with the query, always, so the server records
+      // it; the thread view then skips its own open.
       if (
         threadSearchQuery.trim().length > 0 &&
         !threadSearchQuery.startsWith(">") &&
         thread.lastVisitedAt !== undefined
       ) {
-        const searchQuery = pickedQuery(threadSearchQuery);
-        const isOpen =
-          activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
-        if (isOpen) {
-          claimThreadOpen(thread.environmentId, thread.id, Date.now());
-          void visitThread({
-            environmentId: thread.environmentId,
-            input: { threadId: thread.id, visitedAt: thread.updatedAt, opened: true, searchQuery },
-          });
-        } else {
-          handOffPick(thread.environmentId, thread.id, searchQuery, Date.now());
-        }
+        claimThreadOpen(thread.environmentId, thread.id, Date.now());
+        void visitThread({
+          environmentId: thread.environmentId,
+          input: {
+            threadId: thread.id,
+            visitedAt: thread.updatedAt,
+            opened: true,
+            searchQuery: pickedQuery(threadSearchQuery),
+          },
+        });
       }
       await navigate({
         to: "/$environmentId/$threadId",
@@ -180,7 +173,7 @@ export function useCommandPaletteThreadItems(input: {
   const itemByValue = new Map(threadItems.map((item) => [item.value, item]));
   const itemForMatch = (match: EnvironmentThreadSearchMatch) =>
     itemByValue.get(`thread:${match.environmentId}:${match.threadId}`);
-  const rankedMessageItems = rankMessageMatches(
+  const threadMessageItems = rankMessageMatches(
     messageSearch.matches,
     (match) => itemForMatch(match)?.threadSearch,
     foldSearchQuery(threadSearchQuery),
@@ -214,20 +207,10 @@ export function useCommandPaletteThreadItems(input: {
     ];
   });
 
-  // Rows already shown keep their places when a slower environment answers.
-  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, messageSearch.complete);
-  const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
-  const order = nextShownOrder(
-    shownOrder,
-    messageSearch.query,
-    rankedMessageItems.map((item) => item.value),
-    shownCount,
-  );
-  if (order !== shownOrder) setShownOrder(order);
-  const messageItemByValue = new Map(rankedMessageItems.map((item) => [item.value, item]));
-  const threadMessageItems = (
-    messageSearch.complete ? order.keys : order.keys.slice(0, shownCount)
-  ).flatMap((value) => messageItemByValue.get(value) ?? []);
-
-  return { threadItems, threadMessageItems, now, isSearchPending: messageSearch.isPending };
+  return {
+    threadItems,
+    threadMessageItems,
+    now,
+    isSearchPending: messageSearch.isPending,
+  };
 }

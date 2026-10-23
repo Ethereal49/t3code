@@ -24,7 +24,6 @@ import {
   scoreMessageMatch,
   scoreThreadSearch,
   SEARCH_RECENCY_HALF_LIFE_MS,
-  spellOutLetters,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -50,8 +49,6 @@ const SearchRequest = Schema.Struct({
   /** Tokens every hit must contain, checked on the text. */
   substrings: TokenList,
   projectId: Schema.NullOr(ProjectId),
-  /** Threads a first read already found, so a second read reaches others. */
-  excludedThreadIds: TokenList,
 });
 const SearchRow = Schema.Struct({
   messageRowid: Schema.Number,
@@ -66,26 +63,8 @@ const SNIPPET_LENGTH = 240;
 // The newest hits read per query. A common word stops here instead of reading
 // every message, so time stays flat as history grows.
 const MESSAGE_HIT_LIMIT = 2000;
-// Reads of that many hits per search, when the first is full of weak matches.
-const MESSAGE_READ_LIMIT = 3;
-// Whole-word threads that end the reads early: more than a palette shows.
-const WHOLE_WORD_THREAD_GOAL = 10;
 // Without the index, how many of the newest messages a search scans.
 const MESSAGE_SCAN_LIMIT = 20_000;
-
-// What can come right before a word, for the index pass that finds words a
-// common fragment's newest hits missed: whitespace and every ASCII
-// punctuation mark, as the shared word rule treats them. Indexed text starts
-// with a space, so a message's first word counts. camelCase joins
-// ("enableIngest") are left to the newest hits: the index ignores case.
-const WORD_BOUNDARIES = [
-  " ",
-  "\n",
-  "\t",
-  ...Array.from({ length: 0x7e - 0x21 + 1 }, (_, offset) =>
-    String.fromCharCode(0x21 + offset),
-  ).filter((character) => !/[A-Za-z0-9]/.test(character)),
-];
 
 /**
  * The SQL inputs for a message search, or null when the query has no token
@@ -96,26 +75,13 @@ const WORD_BOUNDARIES = [
 function buildMessageSearch(
   query: string,
   hasIndex: boolean,
-):
-  | (Omit<typeof SearchRequest.Type, "projectId" | "excludedThreadIds"> & {
-      /** The same tokens after a space, for words a common fragment's newest hits miss. */
-      readonly wordMatch: string | null;
-    })
-  | null {
+): Omit<typeof SearchRequest.Type, "projectId"> | null {
   const { long, short } = messageSearchTokens(query);
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
   const indexed = hasIndex && long.every((token) => Array.from(token).length >= 3);
-  const phrase = (text: string) => `"${spellOutLetters(text).replaceAll('"', '""')}"`;
   return {
-    match: indexed ? long.map(phrase).join(" ") : null,
-    wordMatch: indexed
-      ? long
-          .map(
-            (token) => `(${WORD_BOUNDARIES.map((before) => phrase(before + token)).join(" OR ")})`,
-          )
-          .join(" AND ")
-      : null,
+    match: indexed ? long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ") : null,
     substrings: indexed ? short : [...long, ...short],
   };
 }
@@ -125,43 +91,21 @@ const SNIPPET_LEAD = 24;
 
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
-const MARKDOWN_LINK = /\[([^\]\n]*)\]\(([^)\s]*)\)/g;
-
-/**
- * Snippet text as a line reads it: links as their text, without emphasis
- * marks or backticks, whitespace collapsed. A link whose address holds the
- * match stays whole. The client finds the highlights again in the result.
- */
-function plainSnippetText(text: string, matchAt: number): string {
-  return text
-    .replace(MARKDOWN_LINK, (link: string, label: string, _url: string, at: number) =>
-      matchAt > at + label.length + 2 && matchAt < at + link.length ? link : label,
-    )
-    .replace(/\*\*|__|`/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 /**
  * Up to 240 characters starting a few words before the match at `matchStart`,
- * with ellipses where the text was cut. Only the shown part has its
- * whitespace collapsed, so an offset into the raw text stays valid.
+ * whitespace collapsed, with ellipses where the text was cut. The client finds
+ * the highlights again in the result.
  */
 export function buildSearchSnippet(text: string, matchStart: number): string {
-  if (matchStart <= SNIPPET_LEAD * 2 && text.length <= SNIPPET_LENGTH * 2) {
-    const whole = plainSnippetText(text, matchStart);
-    if (whole.length <= SNIPPET_LENGTH) return whole;
-  }
   let start = Math.max(0, matchStart - SNIPPET_LEAD);
   const wordStart = text.slice(start, matchStart).search(/\s/);
   if (start > 0 && wordStart !== -1) start += wordStart + 1;
   // Cut between characters, not inside an emoji's surrogate pair.
   if (isLowSurrogate(text.charCodeAt(start))) start++;
-  // Collapsing whitespace and markdown shortens the text, so read more of it.
-  const rawEnd = Math.min(text.length, start + SNIPPET_LENGTH * 3);
-  const shown = plainSnippetText(text.slice(start, rawEnd), matchStart - start);
-  const bodyLength = SNIPPET_LENGTH - 2;
-  let end = Math.min(shown.length, bodyLength);
+  // Collapsing whitespace shortens the text, so read more of it.
+  const rawEnd = Math.min(text.length, start + SNIPPET_LENGTH * 2);
+  const shown = text.slice(start, rawEnd).replace(/\s+/g, " ").trim();
+  let end = Math.min(shown.length, SNIPPET_LENGTH - 2);
   if (isLowSurrogate(shown.charCodeAt(end))) end--;
   const cut = end < shown.length || rawEnd < text.length;
   return `${start > 0 ? "…" : ""}${shown.slice(0, end)}${cut ? "…" : ""}`;
@@ -180,7 +124,7 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
 // "café"). Exported so a test can check the query plan.
 export const messageHitsQuery = (
   sql: SqlClient.SqlClient,
-  { match, substrings, projectId, excludedThreadIds }: typeof SearchRequest.Encoded,
+  { match, substrings, projectId }: typeof SearchRequest.Encoded,
 ) => sql`
     WITH eligible AS MATERIALIZED (
       SELECT threads.thread_id, threads.project_id
@@ -191,7 +135,6 @@ export const messageHitsQuery = (
         AND threads.archived_at IS NULL
         AND projects.deleted_at IS NULL
         AND (${projectId} IS NULL OR threads.project_id = ${projectId})
-        AND threads.thread_id NOT IN (SELECT value FROM json_each(${excludedThreadIds}))
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
     )
@@ -333,7 +276,6 @@ export const make = Effect.gen(function* () {
     type Hit = {
       readonly row: typeof SearchRow.Type;
       readonly quality: number;
-      readonly midWord: boolean;
       readonly offset: number;
     };
     const newer = (left: Hit, right: Hit) =>
@@ -342,78 +284,35 @@ export const make = Effect.gen(function* () {
       right.quality - left.quality ||
       Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
       newer(left, right);
-    const best = new Map<ThreadId, Hit>();
-    // Matching messages per thread at its best quality: a thread that keeps
-    // using the word ranks above a passing mention, and weaker hits ("Trust"
-    // for "rust") never add to a whole word's count.
-    const hitCounts = new Map<ThreadId, { readonly quality: number; readonly count: number }>();
-    const hitCount = (threadId: ThreadId) => hitCounts.get(threadId)?.count ?? 1;
-    // Returns how many rows matched as words.
-    // A reread can return rows of threads with only mid-word matches again.
-    const readRows = new Set<number>();
-    const addRows = (rows: ReadonlyArray<typeof SearchRow.Type>) => {
-      let words = 0;
-      for (const row of rows) {
-        if (readRows.has(row.messageRowid)) continue;
-        readRows.add(row.messageRowid);
-        const match = scoreMessageMatch(row.text, input.query);
-        if (match === null) continue;
-        if (!match.midWord) words++;
-        const counted = hitCounts.get(row.threadId);
-        if (counted === undefined || match.quality > counted.quality) {
-          hitCounts.set(row.threadId, { quality: match.quality, count: 1 });
-        } else if (match.quality === counted.quality) {
-          hitCounts.set(row.threadId, { quality: match.quality, count: counted.count + 1 });
-        }
-        const hit = { row, ...match };
-        const current = best.get(row.threadId);
-        if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
-      }
-      return words;
-    };
-    yield* read(
+    const rows = yield* read(
       Effect.gen(function* () {
         const index = yield* sql`
           SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
         `;
         const messageSearch = buildMessageSearch(input.query, index.length > 0);
-        if (messageSearch === null) return;
-        const { match, wordMatch, substrings } = messageSearch;
-        const projectId = input.projectId;
-        const limit = input.limit ?? 50;
-        // Three letters are usually the start of a longer word ("con" for
-        // "config"), so only longer words read on for whole-word matches.
-        const wantsWholeWords = messageSearchTokens(input.query).long.every(
-          (token) => Array.from(token).length >= 4,
-        );
-        // A full page can hold few words ("ing" sits mostly inside words), few
-        // threads (one busy thread's newest messages), or only prefixes ("rusty"
-        // for "rust"). Read on past the threads that already have a word
-        // match, a few times at most: words after a boundary when the hits sat
-        // mostly inside words, else the same query.
-        let excludedThreadIds: ReadonlyArray<string> = [];
-        let mostlyInsideWords = false;
-        for (let page = 0; page < MESSAGE_READ_LIMIT; page++) {
-          const rows: ReadonlyArray<typeof SearchRow.Type> = yield* searchRows({
-            match: mostlyInsideWords && wordMatch !== null ? wordMatch : match,
-            substrings,
-            projectId,
-            excludedThreadIds,
-          });
-          const words = addRows(rows);
-          if (rows.length < MESSAGE_HIT_LIMIT) return;
-          mostlyInsideWords = words * 2 < rows.length;
-          const wholeWordThreads = [...best.values()].filter((hit) => hit.quality === 1).length;
-          const enoughThreads =
-            best.size >= limit &&
-            (!wantsWholeWords || wholeWordThreads >= Math.min(limit, WHOLE_WORD_THREAD_GOAL));
-          if (!mostlyInsideWords && enoughThreads) return;
-          excludedThreadIds = [...best].flatMap(([threadId, hit]) =>
-            hit.midWord ? [] : [threadId],
-          );
-        }
+        return messageSearch === null
+          ? []
+          : yield* searchRows({ ...messageSearch, projectId: input.projectId });
       }),
     );
+    const best = new Map<ThreadId, Hit>();
+    // Matching messages per thread at its best quality: a thread that keeps
+    // using the word ranks above a passing mention, and weaker hits ("Trust"
+    // for "rust") never add to a whole word's count.
+    const hitCounts = new Map<ThreadId, number>();
+    const hitCount = (threadId: ThreadId) => hitCounts.get(threadId) ?? 1;
+    for (const row of rows) {
+      const match = scoreMessageMatch(row.text, input.query);
+      if (match === null) continue;
+      const hit = { row, ...match };
+      const current = best.get(row.threadId);
+      if (current === undefined || hit.quality > current.quality) {
+        hitCounts.set(row.threadId, 1);
+      } else if (hit.quality === current.quality) {
+        hitCounts.set(row.threadId, hitCount(row.threadId) + 1);
+      }
+      if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
+    }
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const relevance = (hit: Hit) =>
       messageMatchWeight(hitCount(hit.row.threadId)) *

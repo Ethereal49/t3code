@@ -1,8 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { indexedMessageText } from "../../orchestration-v2/messageSearchIndex.ts";
-
 /**
  * Full-text index for thread message search. The trigram tokenizer matches any
  * substring of three or more characters, ignoring case and accents, so
@@ -19,10 +17,7 @@ import { indexedMessageText } from "../../orchestration-v2/messageSearchIndex.ts
  * Thread search scans the same messages when the index is missing.
  *
  * Triggers keep it in sync with every write to the messages table. Streaming
- * messages are indexed once they finish. Each text is indexed after a space,
- * so a search for a word after a boundary also finds a message's first word,
- * and with the letters search spells out ("ß" as "ss"), which the tokenizer's
- * accent folding does not cover.
+ * messages are indexed once they finish.
  */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -56,7 +51,7 @@ export default Effect.gen(function* () {
       )
     BEGIN
       INSERT INTO orchestration_v2_message_search (rowid, text)
-      SELECT new.rowid, ${indexedMessageText(sql, "new.payload_json")}
+      SELECT new.rowid, json_extract(new.payload_json, '$.text')
       WHERE json_extract(new.payload_json, '$.text') IS NOT NULL;
     END
   `;
@@ -69,7 +64,7 @@ export default Effect.gen(function* () {
     BEGIN
       DELETE FROM orchestration_v2_message_search WHERE rowid = old.rowid AND old.streaming = 0;
       INSERT INTO orchestration_v2_message_search (rowid, text)
-      SELECT new.rowid, ${indexedMessageText(sql, "new.payload_json")}
+      SELECT new.rowid, json_extract(new.payload_json, '$.text')
       WHERE new.streaming = 0
         AND (
           new.role = 'assistant'
@@ -88,7 +83,7 @@ export default Effect.gen(function* () {
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT rowid, ${indexedMessageText(sql, "payload_json")}
+    SELECT rowid, json_extract(payload_json, '$.text')
     FROM orchestration_v2_projection_messages
     WHERE streaming = 0
       AND (
