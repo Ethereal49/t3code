@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
+  MessageId,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -38,6 +39,8 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   quality: Schema.optionalKey(Schema.Finite),
   /** How many of the thread's newest messages match. Older servers omit it. */
   hits: Schema.optionalKey(Schema.Int),
+  /** The message the snippet is from. Older servers omit it. */
+  messageId: Schema.optionalKey(MessageId),
 });
 export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
 

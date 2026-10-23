@@ -195,12 +195,15 @@ export function useCommandPaletteThreadItems(input: {
           snippet: match.snippet,
           query: messageSearch.query,
         },
-        // Opens the thread with find on the word, so the message is in view.
+        // Opens the thread with find on the word at the matched message, so it is in view.
         run: async () => {
           await item.run();
           requestThreadFindQuery(
             scopedThreadKey(scopeThreadRef(match.environmentId, match.threadId)),
-            messageSearchTokens(messageSearch.query).long[0] ?? messageSearch.query,
+            {
+              query: messageSearchTokens(messageSearch.query).long[0] ?? messageSearch.query,
+              ...(match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {}),
+            },
           );
         },
       },

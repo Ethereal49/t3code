@@ -639,5 +639,6 @@ describe("scoreMessageMatch", () => {
     // A letter that grows when lowercased does not shift later offsets.
     expect(scoreMessageMatch("İ Enable fts and model", "fts")).toMatchObject({ offset: 9 });
     expect(scoreMessageMatch("İ Enable fts and model", "model")?.quality).toBe(1);
+    expect(scoreMessageMatch("Trip to İstanbul", "İstanbul")).toEqual({ quality: 1, offset: 8 });
   });
 });

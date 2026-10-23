@@ -551,8 +551,14 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
   for (const token of [...long, ...short]) {
     let found = findMessageToken(text, plain, token);
     // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
-    if (found?.quality !== 1 && (NON_ASCII.test(text) || NON_ASCII.test(token))) {
-      found = findMessageToken(text, (folded ??= foldInPlace(text)), foldInPlace(token));
+    // Marks go from the token: lowercasing "İ" adds one.
+    const foldedToken = foldInPlace(token).replace(COMBINING_MARKS, "");
+    if (
+      found?.quality !== 1 &&
+      foldedToken.length > 0 &&
+      (NON_ASCII.test(text) || NON_ASCII.test(token))
+    ) {
+      found = findMessageToken(text, (folded ??= foldInPlace(text)), foldedToken);
     }
     if (found === null) return null;
     if (found.quality === MID_WORD && Array.from(token).length < MESSAGE_WORD_START_LENGTH) {

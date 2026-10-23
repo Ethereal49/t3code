@@ -199,11 +199,11 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       const result = yield* search.search({ query: "NEEDLE", limit: 20 });
       assert.deepEqual(
         result.matches
-          .map((match) => [match.threadId, match.source, match.snippet])
+          .map((match) => [match.threadId, match.source, match.snippet, match.messageId])
           .toSorted(([left], [right]) => String(left).localeCompare(String(right))),
         [
-          [assistantOnly, "assistant", "needle in an answer"],
-          [both, "user", "newer needle question"],
+          [assistantOnly, "assistant", "needle in an answer", "assistant-only"],
+          [both, "user", "newer needle question", "both-user-new"],
         ],
       );
       assert.lengthOf((yield* search.search({ query: "needle", limit: 1 })).matches, 1);
@@ -398,6 +398,42 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
         search.search({ query }).pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
       assert.deepEqual(yield* threadIds("needle"), [parent]);
       assert.deepEqual(yield* threadIds("pnpm 12"), [parent]);
+    }),
+  );
+
+  it.effect("reads at most the newest 10,000 index hits, however many the filters drop", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const sql = yield* SqlClient.SqlClient;
+      const project = ProjectId.make("project:kestrel");
+      const old = ThreadId.make("thread:kestrel-old");
+      const busy = ThreadId.make("thread:kestrel-busy");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(old, project),
+          message(old, "kestrel-old", "user", "kestrel ci is red"),
+          thread(busy, project),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const insertBusy = (count: number) => sql`
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ${count})
+        INSERT INTO orchestration_v2_projection_messages
+          (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+        SELECT 'kestrel-busy-' || i, ${busy}, 'assistant', 0, ${DateTime.formatIso(at(5))},
+          ${DateTime.formatIso(at(5))}, json_object('text', 'kestrel packages')
+        FROM n
+      `;
+      const threadIds = (query: string) =>
+        search.search({ query }).pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+      yield* insertBusy(9_999);
+      assert.deepEqual(yield* threadIds("kestrel ci"), [old]);
+      yield* sql`DELETE FROM orchestration_v2_projection_messages WHERE thread_id = ${busy}`;
+      yield* insertBusy(10_000);
+      assert.deepEqual(yield* threadIds("kestrel ci"), []);
     }),
   );
 });

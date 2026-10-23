@@ -1,5 +1,6 @@
 import {
   IsoDateTime,
+  MessageId,
   OrchestrationThreadSearchSource,
   OrchestrationV2AppThreadJson,
   type OrchestrationSearchThreadsInput,
@@ -52,6 +53,7 @@ const SearchRequest = Schema.Struct({
 });
 const SearchRow = Schema.Struct({
   messageRowid: Schema.Number,
+  messageId: MessageId,
   threadId: ThreadId,
   projectId: ProjectId,
   source: OrchestrationThreadSearchSource,
@@ -63,6 +65,9 @@ const SNIPPET_LENGTH = 240;
 // The newest hits read per query. A common word stops here instead of reading
 // every message, so time stays flat as history grows.
 const MESSAGE_HIT_LIMIT = 2000;
+// How many of the newest index hits the filters may pass over to fill that
+// limit: a rare short word or hidden threads would otherwise read every hit.
+const MESSAGE_CANDIDATE_LIMIT = 10_000;
 // Without the index, how many of the newest messages a search scans.
 const MESSAGE_SCAN_LIMIT = 20_000;
 
@@ -143,6 +148,7 @@ export const messageHitsQuery = (
         ? sql`
           SELECT
             messages.rowid AS "messageRowid",
+            messages.message_id AS "messageId",
             messages.thread_id AS "threadId",
             eligible.project_id AS "projectId",
             messages.role AS source,
@@ -159,6 +165,7 @@ export const messageHitsQuery = (
         : sql`
           SELECT
             orchestration_v2_message_search.rowid AS "messageRowid",
+            messages.message_id AS "messageId",
             messages.thread_id AS "threadId",
             eligible.project_id AS "projectId",
             messages.role AS source,
@@ -169,6 +176,12 @@ export const messageHitsQuery = (
             ON messages.rowid = orchestration_v2_message_search.rowid
           INNER JOIN eligible ON eligible.thread_id = messages.thread_id
           WHERE orchestration_v2_message_search MATCH ${match}
+            AND orchestration_v2_message_search.rowid >= coalesce((
+              SELECT rowid FROM orchestration_v2_message_search
+              WHERE orchestration_v2_message_search MATCH ${match}
+              ORDER BY rowid DESC
+              LIMIT 1 OFFSET ${MESSAGE_CANDIDATE_LIMIT - 1}
+            ), 0)
         `
     }
       AND NOT EXISTS (
@@ -332,6 +345,7 @@ export const make = Effect.gen(function* () {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, quality, offset }) => ({
         hits: hitCount(row.threadId),
         threadId: row.threadId,
+        messageId: row.messageId,
         projectId: row.projectId,
         source: row.source,
         snippet: buildSearchSnippet(row.text, offset),
@@ -396,7 +410,7 @@ export const make = Effect.gen(function* () {
       normalizedQuery,
       now,
       { picks: false },
-    ).map(({ quality: _quality, hits: _hits, ...match }) => ({
+    ).map(({ quality: _quality, hits: _hits, messageId: _messageId, ...match }) => ({
       ...match,
       title: subjectById.get(match.threadId)!.title,
     }));
