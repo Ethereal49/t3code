@@ -293,6 +293,47 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
   );
 });
 
+it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) => {
+  it.effect(
+    "matches Korean, Japanese, and two-character Chinese words, and whole short words",
+    () =>
+      Effect.gen(function* () {
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const search = yield* ThreadSearch.ThreadSearch;
+        const sql = yield* SqlClient.SqlClient;
+        const project = ProjectId.make("project:scripts");
+        const threadId = ThreadId.make("thread:scripts");
+        const drafts = ThreadId.make("thread:drafts");
+        yield* createProject(project);
+        yield* Effect.forEach(
+          [
+            thread(threadId, project),
+            message(threadId, "korean", "user", "검색 기능을 고쳐 주세요"),
+            message(threadId, "japanese", "user", "がんばって検索します"),
+            message(threadId, "chinese", "user", "明天部署到生产环境"),
+            message(threadId, "fts", "assistant", "the FTS index is ready"),
+            thread(drafts, project),
+            message(drafts, "drafts", "assistant", "saved two drafts and shifts"),
+          ],
+          projections.apply,
+          { discard: true },
+        );
+        const threadIds = (query: string) =>
+          search
+            .search({ query })
+            .pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+
+        for (const query of ["검색 기능", "がんばって", "部署", "fts"]) {
+          assert.deepEqual(yield* threadIds(query), [threadId], query);
+        }
+        // Without the index (an SQLite build without FTS5 trigrams) search scans instead.
+        yield* sql`DROP TABLE orchestration_v2_message_search`;
+        assert.deepEqual(yield* threadIds("検索"), [threadId]);
+        assert.deepEqual(yield* threadIds("fts"), [threadId]);
+      }),
+  );
+});
+
 it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
   it.effect("ranks title matches like the palette, then message matches, within one project", () =>
     Effect.gen(function* () {

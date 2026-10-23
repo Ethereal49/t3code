@@ -1,6 +1,5 @@
 import {
   findSearchTokenRanges,
-  normalizeSearchQuery,
   splitSearchText,
   type SearchRange,
 } from "@t3tools/shared/searchRank";
@@ -34,7 +33,7 @@ export function ThreadSearchMatchExcerpt(props: {
       </span>{" "}
       <HighlightedSearchText
         text={props.match.snippet}
-        ranges={findSearchTokenRanges(props.match.snippet, normalizeSearchQuery(props.match.query))}
+        ranges={findSearchTokenRanges(props.match.snippet, props.match.query)}
       />
     </span>
   );

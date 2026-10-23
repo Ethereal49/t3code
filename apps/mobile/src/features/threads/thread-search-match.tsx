@@ -1,8 +1,4 @@
-import {
-  findSearchTokenRanges,
-  normalizeSearchQuery,
-  splitSearchText,
-} from "@t3tools/shared/searchRank";
+import { findSearchTokenRanges, splitSearchText } from "@t3tools/shared/searchRank";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -18,7 +14,7 @@ export function ThreadSearchMatchExcerpt(props: {
   const isUser = props.match.source === "user";
   const parts = splitSearchText(
     props.match.snippet,
-    findSearchTokenRanges(props.match.snippet, normalizeSearchQuery(props.query)),
+    findSearchTokenRanges(props.match.snippet, props.query),
   );
   return (
     <Text

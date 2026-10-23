@@ -29,8 +29,7 @@ export interface CommandPaletteResult extends CommandPaletteItem {
 
 const THREAD_RESULT_LIMIT = 20;
 const MESSAGE_RESULT_LIMIT = 10;
-// Same weighting and limits as the web palette.
-const ACTION_WEIGHT = 3;
+// Same limit as the web palette.
 const SECONDARY_GROUP_LIMIT = 3;
 
 /**
@@ -50,16 +49,13 @@ export function filterCommandPaletteItems(
   const candidates = actionsOnly ? items.filter((item) => item.kind === "action") : items;
   if (!normalizedQuery) return candidates.filter((item) => item.kind !== "project");
 
-  // On equal best matches, groups keep this order: threads are what people search for most.
+  // On equal match classes, groups keep this order, as on web.
   const kinds = ["action", "thread", "project"] as const;
   const groups = rankSearchGroups(
     kinds.map((kind) => ({ group: kind, items: candidates.filter((item) => item.kind === kind) })),
-    (item, options, kind) => {
+    (item, options) => {
       if (!item.threadSearch) {
-        return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], {
-          ...options,
-          weight: kind === "action" && !actionsOnly ? ACTION_WEIGHT : 1,
-        });
+        return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
       }
       const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
       return match && { ...match, ranges: match.titleRanges };

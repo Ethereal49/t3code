@@ -21,7 +21,7 @@ import {
   type EnvironmentThreadSearchMatch,
   type SettledThreadSearch,
 } from "@t3tools/client-runtime/state/thread-search";
-import { messageSearchTokens, normalizeSearchQuery } from "@t3tools/shared/searchRank";
+import { messageSearchTokens } from "@t3tools/shared/searchRank";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
@@ -173,8 +173,7 @@ export function useThreadSearch(
   const debouncedQuery = useDebouncedValue(normalizedQuery, THREAD_SEARCH_DEBOUNCE_MS);
   // The server needs a word of three or more letters; shorter queries would always come back empty.
   const canSearch =
-    environmentIds.length > 0 &&
-    messageSearchTokens(normalizeSearchQuery(normalizedQuery)).long.length > 0;
+    environmentIds.length > 0 && messageSearchTokens(normalizedQuery).long.length > 0;
   const settledQuery = canSearch && normalizedQuery === debouncedQuery ? debouncedQuery : null;
   const searchKey =
     settledQuery === null ? null : makeThreadSearchKey(environmentIds, settledQuery);

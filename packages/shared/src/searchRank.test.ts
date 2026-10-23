@@ -193,7 +193,7 @@ describe("recordThreadOpen", () => {
 describe("findSearchTokenRanges", () => {
   it("maps folded matches back to the source text and skips short tokens", () => {
     const text = "Le Café résumé ci";
-    expect(findSearchTokenRanges(text, normalizeSearchQuery("CAFE resume ci"))).toEqual([
+    expect(findSearchTokenRanges(text, "CAFE resume ci")).toEqual([
       { start: 3, end: 7 },
       { start: 8, end: 14 },
     ]);

@@ -14,6 +14,7 @@ import * as SqlClient from "effect/sql/SqlClient";
  * The index is contentless and keyed by the message rowid: search reads the
  * text back from the message row, so the text is not stored twice. `t3 doctor`
  * rebuilds it after its VACUUM, since SQLite does not promise to keep rowids.
+ * Thread search scans the same messages when the index is missing.
  *
  * Triggers keep it in sync with every write to the messages table. Streaming
  * messages are indexed once they finish.
@@ -21,14 +22,25 @@ import * as SqlClient from "effect/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`
+  // Node and Electron bundle a SQLite with these options; a Node built against
+  // an older system SQLite may lack them. Search then scans messages instead
+  // of failing to start.
+  const created = yield* sql`
     CREATE VIRTUAL TABLE orchestration_v2_message_search USING fts5(
       text,
       content = '',
       contentless_delete = 1,
       tokenize = 'trigram remove_diacritics 1'
     )
-  `;
+  `.pipe(
+    Effect.as(true),
+    Effect.catch((cause) =>
+      Effect.logWarning("Message search index unavailable; search will scan messages.", cause).pipe(
+        Effect.as(false),
+      ),
+    ),
+  );
+  if (!created) return;
   yield* sql`
     CREATE TRIGGER orchestration_v2_message_search_insert
     AFTER INSERT ON orchestration_v2_projection_messages

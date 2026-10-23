@@ -17,9 +17,13 @@ const COMBINING_MARKS = /\p{M}/gu;
 interface SearchField {
   /** Case- and accent-folded text. */
   readonly text: string;
-  readonly wordStarts: ReadonlyArray<boolean>;
-  /** The source string index of each folded character, for highlighting. */
-  readonly sourceIndex: ReadonlyArray<number>;
+  /** 1 where a word starts in `text`. */
+  readonly wordStarts: Uint8Array;
+  /**
+   * The source string index of each folded character, for highlighting; null
+   * when every character maps to itself, as in plain ASCII.
+   */
+  readonly sourceIndex: Int32Array | null;
   readonly sourceLength: number;
 }
 
@@ -29,9 +33,11 @@ export interface SearchRange {
 }
 
 // Thread titles, branches, and project names repeat across keystrokes; folding
-// them once keeps a keystroke to plain string scans.
+// them once keeps a keystroke to plain string scans. Each keystroke reads every
+// field, so the limit must hold all of them or the cache clears every time; a
+// field is a few bytes per character.
 const fieldCache = new Map<string, SearchField>();
-const FIELD_CACHE_LIMIT = 10_000;
+const FIELD_CACHE_LIMIT = 100_000;
 
 function foldCharacter(character: string): string {
   return character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
@@ -48,10 +54,19 @@ function isCjk(character: string): boolean {
   );
 }
 
+// Two Chinese, Japanese, or Korean characters already make a common word.
+function hasCjkWord(token: string): boolean {
+  return Array.from(token).some((character) => {
+    const code = character.codePointAt(0)!;
+    return isCjk(character) || (code >= 0xac00 && code <= 0xd7af);
+  });
+}
+
 function foldSearchField(source: string): SearchField {
   let text = "";
-  const wordStarts: boolean[] = [];
+  const wordStarts: number[] = [];
   const sourceIndex: number[] = [];
+  let identity = true;
   let previous = "";
   let index = 0;
   for (const character of source) {
@@ -63,15 +78,21 @@ function foldSearchField(source: string): SearchField {
         DIGIT.test(previous) !== DIGIT.test(character) ||
         isCjk(character));
     const folded = foldCharacter(character);
+    identity &&= folded.length === 1 && character.length === 1;
     for (let offset = 0; offset < folded.length; offset++) {
       text += folded[offset];
-      wordStarts.push(offset === 0 && startsWord);
+      wordStarts.push(offset === 0 && startsWord ? 1 : 0);
       sourceIndex.push(index);
     }
     previous = character;
     index += character.length;
   }
-  return { text, wordStarts, sourceIndex, sourceLength: source.length };
+  return {
+    text,
+    wordStarts: Uint8Array.from(wordStarts),
+    sourceIndex: identity ? null : Int32Array.from(sourceIndex),
+    sourceLength: source.length,
+  };
 }
 
 function prepareSearchField(source: string): SearchField {
@@ -198,9 +219,11 @@ interface SearchFieldsMatch {
 function toSourceRanges(field: SearchField, ranges: ReadonlyArray<SearchRange>): SearchRange[] {
   const merged: SearchRange[] = [];
   for (const range of [...ranges].sort((left, right) => left.start - right.start)) {
-    const start = field.sourceIndex[range.start]!;
+    const start = field.sourceIndex?.[range.start] ?? range.start;
     const end =
-      range.end < field.sourceIndex.length ? field.sourceIndex[range.end]! : field.sourceLength;
+      range.end < field.text.length
+        ? (field.sourceIndex?.[range.end] ?? range.end)
+        : field.sourceLength;
     const last = merged.at(-1);
     if (last && start <= last.end) {
       merged[merged.length - 1] = { start: last.start, end: Math.max(last.end, end) };
@@ -259,23 +282,41 @@ function matchSearchFields(
   };
 }
 
-// The server's trigram index cannot match shorter tokens, and a two-letter
-// substring of a message is noise rather than a match.
+// A two-letter Latin substring of a message is noise rather than a match.
 const MESSAGE_TOKEN_MIN_LENGTH = 3;
 
 /**
- * Message search tokens: every `long` one must appear as a substring; `short`
- * ones only narrow those hits ("pnpm 12"). No long token means no search.
+ * Message search tokens, lowercased and NFC-composed but not stripped of
+ * accents: the server's index folds Latin accents itself, and stripping marks
+ * would break Korean and Japanese text. Every `long` token must appear in a
+ * message; `short` ones only narrow those hits ("pnpm 12"). A query with no
+ * long token searches no messages. Two CJK characters count as long.
  */
-export function messageSearchTokens(normalizedQuery: string): {
+export function messageSearchTokens(query: string): {
   readonly long: ReadonlyArray<string>;
   readonly short: ReadonlyArray<string>;
 } {
-  const tokens = normalizedQuery.split(" ").filter((token) => token.length > 0);
-  return {
-    long: tokens.filter((token) => [...token].length >= MESSAGE_TOKEN_MIN_LENGTH),
-    short: tokens.filter((token) => [...token].length < MESSAGE_TOKEN_MIN_LENGTH),
+  const tokens = query
+    .normalize("NFC")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+  const searchable = (token: string) => {
+    const length = Array.from(token).length;
+    return length >= MESSAGE_TOKEN_MIN_LENGTH || (length === 2 && hasCjkWord(token));
   };
+  return {
+    long: tokens.filter(searchable),
+    short: tokens.filter((token) => !searchable(token)),
+  };
+}
+
+/**
+ * Whether a message token must start a word. Short Latin tokens match inside
+ * too many words ("fts" in "drafts"); CJK text has no word boundaries.
+ */
+export function messageTokenNeedsWordStart(token: string): boolean {
+  return Array.from(token).length < 4 && !hasCjkWord(token);
 }
 
 /**
@@ -283,26 +324,27 @@ export function messageSearchTokens(normalizedQuery: string): {
  * long, so a plain lowercase search goes first; folding accents ("cafe" in
  * "café") only runs when that misses.
  */
-export function firstSearchTokenOffset(text: string, normalizedQuery: string): number {
-  const { long } = messageSearchTokens(normalizedQuery);
+export function firstSearchTokenOffset(text: string, query: string): number {
   const lowerText = text.toLowerCase();
-  const offsets = long.map((token) => lowerText.indexOf(token)).filter((index) => index !== -1);
+  const offsets = messageSearchTokens(query)
+    .long.map((token) => lowerText.indexOf(token))
+    .filter((index) => index !== -1);
   if (offsets.length > 0) return Math.min(...offsets);
   // Folding is per character, so bound it for very long messages.
-  return findSearchTokenRanges(text.slice(0, 20_000), normalizedQuery)[0]?.start ?? 0;
+  return findSearchTokenRanges(text.slice(0, 20_000), query)[0]?.start ?? 0;
 }
 
 /**
- * Ranges of `text` that contain a query token of three or more characters, for
- * message snippets. Message search matches those tokens as plain substrings
- * and ignores shorter ones, which would light up half the snippet. Snippets
- * vary per query, so they skip the field cache.
+ * Ranges of `text` that contain a long message search token, for message
+ * snippets, ignoring case and accents. Shorter tokens would light up half the
+ * snippet. Snippets vary per query, so they skip the field cache.
  */
-export function findSearchTokenRanges(text: string, normalizedQuery: string): SearchRange[] {
-  if (normalizedQuery.length === 0) return [];
+export function findSearchTokenRanges(text: string, query: string): SearchRange[] {
+  const tokens = new Set(messageSearchTokens(query).long.map(normalizeSearchQuery));
+  if (tokens.size === 0) return [];
   const field = foldSearchField(text);
   const ranges: SearchRange[] = [];
-  for (const token of new Set(messageSearchTokens(normalizedQuery).long)) {
+  for (const token of tokens) {
     for (
       let index = field.text.indexOf(token);
       index !== -1;
@@ -451,6 +493,8 @@ function pickBoost(thread: ThreadSearchSubject, normalizedQuery: string, now: nu
 export interface ThreadSearchMatch {
   /** Match quality times use; what results sort by. */
   readonly score: number;
+  /** Match quality alone; see `rankSearchGroups`. */
+  readonly quality: number;
   /** Every token matched at a word start; see `rankSearchGroups`. */
   readonly strong: boolean;
   readonly titleRanges: ReadonlyArray<SearchRange>;
@@ -484,6 +528,7 @@ export function scoreThreadSearch(
   if (match === null) return null;
   return {
     score: match.quality * (threadUsageBoost(thread, now) + boost),
+    quality: match.quality,
     strong: match.strong,
     titleRanges: match.primaryRanges,
   };
@@ -511,6 +556,13 @@ export function rankMessageMatches<T extends { readonly rank: number }>(
     .map(({ match }) => match);
 }
 
+// Every token at a word start of a main field (0.7 and up), or weaker. Whole
+// word against prefix is too fine a line for group order: "compact" must not
+// lift a setting named "Compact…" over the thread "Compaction…".
+function matchClass(quality: number): number {
+  return quality >= 0.7 ? 1 : 0;
+}
+
 export interface RankedSearchItem<T, M> {
   readonly item: T;
   readonly match: M;
@@ -518,10 +570,11 @@ export interface RankedSearchItem<T, M> {
 
 /**
  * Ranks grouped items, best score first within each group. Groups with no
- * match are dropped, and the rest order by their best score, so the top row is
- * the best result overall; ties keep the given order. Callers weigh groups
- * through the score: a thread's score includes its use, so an active thread
- * outranks a setting that matches about as well.
+ * match are dropped. The rest order by the class of their best match (word
+ * starts or weaker), and ties keep the given order. Classes
+ * rather than scores keep the group order steady while a word is typed, and
+ * keep use, which only counts for threads, from outweighing a command that
+ * matches as well.
  *
  * Typos are only tried when no result matches every token at a word start:
  * next to a real match, typo matches are noise ("enter" finding "external"),
@@ -531,7 +584,7 @@ export interface RankedSearchItem<T, M> {
 export function rankSearchGroups<
   G,
   T,
-  M extends { readonly score: number; readonly strong: boolean },
+  M extends { readonly score: number; readonly quality: number; readonly strong: boolean },
 >(
   groups: ReadonlyArray<{ readonly group: G; readonly items: ReadonlyArray<T> }>,
   score: (item: T, options: { readonly typos: boolean }, group: G) => M | null,
@@ -552,14 +605,18 @@ export function rankSearchGroups<
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];
       const sorted = [...items].sort((left, right) => right.match.score - left.match.score);
-      return [{ group, ranked: sorted, best: sorted[0]!.match.score, order }];
+      const best = Math.max(...items.map(({ match }) => matchClass(match.quality)));
+      return [{ group, ranked: sorted, best, order }];
     })
     .sort((left, right) => right.best - left.best || left.order - right.order)
     .map(({ group, ranked: items }) => ({ group, ranked: items }));
 }
 
 /** `rankSearchGroups` for a single list. */
-export function rankSearchItems<T, M extends { readonly score: number; readonly strong: boolean }>(
+export function rankSearchItems<
+  T,
+  M extends { readonly score: number; readonly quality: number; readonly strong: boolean },
+>(
   items: ReadonlyArray<T>,
   score: (item: T, options: { readonly typos: boolean }) => M | null,
 ): ReadonlyArray<RankedSearchItem<T, M>> {
@@ -568,6 +625,7 @@ export function rankSearchItems<T, M extends { readonly score: number; readonly 
 
 export interface SearchTermsMatch {
   readonly score: number;
+  readonly quality: number;
   readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
 }
@@ -578,13 +636,12 @@ const KEYWORD_QUERY_MIN_LENGTH = 4;
 /**
  * Scores a non-thread result such as a command or project. The first term
  * names it; the others are keywords that help it match but count less, and
- * only for queries of four or more characters. `weight` scales the score
- * against other groups.
+ * only for queries of four or more characters.
  */
 export function scoreSearchTerms(
   normalizedQuery: string,
   terms: ReadonlyArray<string>,
-  options?: { readonly typos?: boolean; readonly weight?: number },
+  options?: { readonly typos?: boolean },
 ): SearchTermsMatch | null {
   const fields = normalizedQuery.length < KEYWORD_QUERY_MIN_LENGTH ? terms.slice(0, 1) : terms;
   const match = matchSearchFields(
@@ -594,7 +651,8 @@ export function scoreSearchTerms(
   );
   return (
     match && {
-      score: match.quality * (options?.weight ?? 1),
+      score: match.quality,
+      quality: match.quality,
       strong: match.strong,
       ranges: match.primaryRanges,
     }

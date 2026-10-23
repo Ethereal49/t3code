@@ -278,6 +278,47 @@ describe("buildThreadActionItems", () => {
     expect(labels("pnpm up")).toEqual(["Threads"]);
   });
 
+  it("keeps a command first over a thread in daily use that matches as well", () => {
+    const now = Date.parse("2026-10-23T00:00:00.000Z");
+    const threadSearchItems = buildThreadActionItems({
+      threads: [
+        makeThread({
+          title: "New onboarding flow",
+          latestUserMessageAt: "2026-10-22T00:00:00.000Z",
+          opens: { openedAt: "2026-10-22T00:00:00.000Z", score: 7, queries: [] },
+        }),
+      ],
+      projectByKey: new Map(),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async () => undefined,
+    });
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [
+        {
+          value: "actions",
+          label: "Actions",
+          items: [
+            {
+              kind: "action",
+              value: "action:new-thread",
+              searchTerms: ["new thread", "chat"],
+              title: "New thread",
+              icon: null,
+              run: async () => undefined,
+            },
+          ],
+        },
+      ],
+      query: "new",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems,
+      now,
+    });
+    expect(groups.map((group) => group.label)).toEqual(["Actions", "Threads"]);
+  });
+
   it("ranks an order-independent setting title match above a split context match", () => {
     const settingsSearchItems = [
       {

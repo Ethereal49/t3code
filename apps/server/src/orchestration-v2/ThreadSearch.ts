@@ -18,6 +18,7 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
   firstSearchTokenOffset,
   messageSearchTokens,
+  messageTokenNeedsWordStart,
   normalizeSearchQuery,
   rankMessageMatches,
   rankSearchItems,
@@ -38,10 +39,15 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   }
 }
 
+// Token lists bind as JSON arrays, so any number of them is one parameter.
+const TokenList = Schema.fromJsonString(Schema.Array(Schema.String));
 const SearchRequest = Schema.Struct({
-  match: Schema.String,
-  // A JSON array in SQL, so any number of short tokens binds as one parameter.
-  shortTokens: Schema.fromJsonString(Schema.Array(Schema.String)),
+  /** The FTS5 query, or null to scan messages instead. */
+  match: Schema.NullOr(Schema.String),
+  /** Tokens every hit must contain, checked on the text. */
+  substrings: TokenList,
+  /** GLOB-escaped tokens that must start a word in the hit. */
+  wordStarts: TokenList,
   projectId: Schema.NullOr(ProjectId),
   limit: Schema.Int,
 });
@@ -55,18 +61,28 @@ const SearchRow = Schema.Struct({
 
 const SNIPPET_LENGTH = 240;
 
+function escapeGlob(token: string): string {
+  return token.replace(/[[*?]/g, (character) => `[${character}]`);
+}
+
 /**
- * Every long-enough token as a quoted FTS5 phrase, so all must appear, and the
- * shorter tokens for a substring check on the hits.
+ * The SQL inputs for a message search, or null when the query has no token
+ * long enough to search. Tokens of three or more characters go to the
+ * trigram index as quoted phrases; shorter ones, and every token when the
+ * index cannot serve the query, are checked as substrings of the hits.
  */
 function buildMessageSearch(
   query: string,
-): { readonly match: string; readonly shortTokens: ReadonlyArray<string> } | null {
-  const { long, short } = messageSearchTokens(normalizeSearchQuery(query));
+  hasIndex: boolean,
+): Omit<typeof SearchRequest.Type, "projectId" | "limit"> | null {
+  const { long, short } = messageSearchTokens(query);
   if (long.length === 0) return null;
+  // Two-character CJK words are too short for trigrams.
+  const indexed = hasIndex && long.every((token) => Array.from(token).length >= 3);
   return {
-    match: long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" "),
-    shortTokens: short,
+    match: indexed ? long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ") : null,
+    substrings: indexed ? short : [...long, ...short],
+    wordStarts: [...long, ...short].filter(messageTokenNeedsWordStart).map(escapeGlob),
   };
 }
 
@@ -80,7 +96,7 @@ const SNIPPET_LEAD = 24;
  */
 export function buildSearchSnippet(text: string, query: string): string {
   const normalizedText = text.replace(/\s+/g, " ").trim();
-  const matchStart = firstSearchTokenOffset(normalizedText, normalizeSearchQuery(query));
+  const matchStart = firstSearchTokenOffset(normalizedText, query);
   if (normalizedText.length <= SNIPPET_LENGTH && matchStart <= SNIPPET_LEAD * 2) {
     return normalizedText;
   }
@@ -132,14 +148,18 @@ export const make = Effect.gen(function* () {
 
   // One message per active, non-subagent thread: a user message when one
   // matches, since that is what the user remembers asking. Threads order by
-  // their best bm25 hit. Every palette and sidebar hides subagent threads, so
-  // their messages would only use up the limit. Filters apply before ranking,
-  // so hidden threads never crowd out a visible match, and message bodies are
-  // read only for the winners.
+  // their best bm25 hit, or by recency when scanning. Every palette and sidebar
+  // hides subagent threads, so their messages would only use up the limit.
+  // Filters apply before ranking, so hidden threads never crowd out a visible
+  // match, and message bodies are read only for the winners.
+  //
+  // Without the index (an SQLite build without FTS5 trigrams, see migration
+  // 69) or for two-character CJK words, the same query scans the messages
+  // migration 69 would index.
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ match, shortTokens, projectId, limit }) => sql`
+    execute: ({ match, substrings, wordStarts, projectId, limit }) => sql`
       WITH eligible AS MATERIALIZED (
         SELECT threads.thread_id
         FROM orchestration_v2_projection_threads AS threads
@@ -153,21 +173,52 @@ export const make = Effect.gen(function* () {
             IS NOT 'subagent'
       ),
       hits AS (
-        SELECT
-          messages.rowid AS message_rowid,
-          messages.thread_id,
-          messages.role,
-          messages.created_at,
-          messages.message_id,
-          bm25(orchestration_v2_message_search) AS score
-        FROM orchestration_v2_message_search
-        INNER JOIN orchestration_v2_projection_messages AS messages
-          ON messages.rowid = orchestration_v2_message_search.rowid
-        WHERE orchestration_v2_message_search MATCH ${match}
+        ${
+          match === null
+            ? sql`
+              SELECT
+                messages.rowid AS message_rowid,
+                messages.thread_id,
+                messages.role,
+                messages.created_at,
+                messages.message_id,
+                0 AS score
+              FROM orchestration_v2_projection_messages AS messages
+              WHERE messages.streaming = 0
+                AND (
+                  messages.role = 'assistant'
+                  OR (
+                    messages.role = 'user'
+                    AND COALESCE(json_extract(messages.payload_json, '$.createdBy'), 'user') = 'user'
+                  )
+                )
+            `
+            : sql`
+              SELECT
+                messages.rowid AS message_rowid,
+                messages.thread_id,
+                messages.role,
+                messages.created_at,
+                messages.message_id,
+                bm25(orchestration_v2_message_search) AS score
+              FROM orchestration_v2_message_search
+              INNER JOIN orchestration_v2_projection_messages AS messages
+                ON messages.rowid = orchestration_v2_message_search.rowid
+              WHERE orchestration_v2_message_search MATCH ${match}
+            `
+        }
           AND messages.thread_id IN eligible
           AND NOT EXISTS (
-            SELECT 1 FROM json_each(${shortTokens}) AS token
+            SELECT 1 FROM json_each(${substrings}) AS token
             WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(${wordStarts}) AS token
+            WHERE NOT (
+              lower(json_extract(messages.payload_json, '$.text')) GLOB token.value || '*'
+              OR lower(json_extract(messages.payload_json, '$.text'))
+                GLOB '*[^a-z0-9]' || token.value || '*'
+            )
           )
       ),
       ranked AS (
@@ -244,14 +295,18 @@ export const make = Effect.gen(function* () {
   const searchMessages = Effect.fn("ThreadSearch.searchMessages")(function* (
     input: OrchestrationSearchThreadsInput & { readonly projectId: ProjectId | null },
   ) {
-    const messageSearch = buildMessageSearch(input.query);
-    if (messageSearch === null) return { matches: [] };
     const rows = yield* read(
-      searchRows({
-        match: messageSearch.match,
-        shortTokens: messageSearch.shortTokens,
-        projectId: input.projectId,
-        limit: input.limit ?? 50,
+      Effect.gen(function* () {
+        const index = yield* sql`
+          SELECT 1 FROM sqlite_master WHERE name = 'orchestration_v2_message_search'
+        `;
+        const messageSearch = buildMessageSearch(input.query, index.length > 0);
+        if (messageSearch === null) return [];
+        return yield* searchRows({
+          ...messageSearch,
+          projectId: input.projectId,
+          limit: input.limit ?? 50,
+        });
       }),
     );
     return {

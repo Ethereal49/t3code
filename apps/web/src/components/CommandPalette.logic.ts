@@ -464,32 +464,31 @@ function rankPaletteItem(
   item: PaletteItem,
   normalizedQuery: string,
   now: number,
-  options: { readonly typos: boolean; readonly weight: number },
+  options: { readonly typos: boolean },
 ): {
   readonly score: number;
+  readonly quality: number;
   readonly strong: boolean;
   readonly ranges: ReadonlyArray<SearchRange>;
 } | null {
   if (item.threadSearch) {
     const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
-    return match && { score: match.score, strong: match.strong, ranges: match.titleRanges };
+    return match && { ...match, ranges: match.titleRanges };
   }
   const match = scoreSearchTerms(normalizedQuery, item.searchTerms, options);
   // Ranges index the first search term, so they only highlight a title that is that term.
   return match && (item.title === item.searchTerms[0] ? match : { ...match, ranges: [] });
 }
 
-// Commands count like a thread in daily use, so "new" still runs "New thread"
-// rather than opening a recent thread named "New thread".
-const ACTION_WEIGHT = 3;
 // Next to matching threads, other groups show only their best few rows.
 const SECONDARY_GROUP_LIMIT = 3;
 
 /**
- * Filters and ranks the palette for a query. Groups order by their best score,
- * where threads count their use, so a thread you work in is not stuck under a
- * setting that matches about as well. Server message matches always come
- * last, in their own group, so rows above never move when they arrive.
+ * Filters and ranks the palette for a query. Groups order by the class of their
+ * best match, and on equal classes commands come first, then threads, so "new"
+ * runs "New thread" and a thread's title is not stuck under a setting. Server
+ * message matches always come last, in their own group, so rows above never
+ * move when they arrive.
  */
 export function filterCommandPaletteGroups(input: {
   activeGroups: ReadonlyArray<CommandPaletteGroup>;
@@ -522,7 +521,8 @@ export function filterCommandPaletteGroups(input: {
 
   const searchableGroups = [...baseGroups];
   const searchesEverything = !input.isInSubmenu && !isActionsFilter;
-  // On equal best matches, groups keep this order: threads are what people search for most.
+  // On equal match classes, groups keep this order: threads, what people search
+  // for most, right after commands.
   if (searchesEverything) {
     if (input.threadSearchItems.length > 0) {
       searchableGroups.push({
@@ -550,11 +550,7 @@ export function filterCommandPaletteGroups(input: {
   const now = input.now ?? Date.now();
   const ranked = rankSearchGroups(
     searchableGroups.map((group) => ({ group, items: group.items })),
-    (item, { typos }, group) =>
-      rankPaletteItem(item, normalizedQuery, now, {
-        typos,
-        weight: searchesEverything && group.value === "actions" ? ACTION_WEIGHT : 1,
-      }),
+    (item, options) => rankPaletteItem(item, normalizedQuery, now, options),
   );
   const threadsMatch = ranked.some(({ group }) => group.value === "threads-search");
   const groups = ranked.map(({ group, ranked }): CommandPaletteGroup => {
