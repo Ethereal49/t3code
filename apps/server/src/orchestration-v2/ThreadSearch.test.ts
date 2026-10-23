@@ -334,6 +334,27 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
         }
         // "res" inside "addresses" does not hide the accented word after it.
         assert.sameMembers(yield* threadIds("res"), [threadId, addresses]);
+        // A word beats the same letters inside a longer word, even in an older message.
+        const trust = ThreadId.make("thread:trust");
+        const rust = ThreadId.make("thread:rust");
+        yield* Effect.forEach(
+          [
+            thread(rust, project),
+            message(rust, "rust", "assistant", "Rust rewrite notes"),
+            thread(trust, project),
+            message(trust, "trust", "user", "We trust the build"),
+          ],
+          projections.apply,
+          { discard: true },
+        );
+        const { matches } = yield* search.search({ query: "rust" });
+        assert.deepEqual(
+          matches.map((match) => [match.threadId, match.midWord ?? false]),
+          [
+            [rust, false],
+            [trust, true],
+          ],
+        );
         // Without the index (an SQLite build without FTS5 trigrams) search scans instead.
         yield* sql`DROP TABLE orchestration_v2_message_search`;
         assert.deepEqual(yield* threadIds("検索"), [threadId]);

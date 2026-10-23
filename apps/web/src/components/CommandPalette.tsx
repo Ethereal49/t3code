@@ -902,8 +902,13 @@ function OpenCommandPaletteDialog(props: {
     now: searchNow,
     isSearchPending: isThreadSearchPending,
   } = useCommandPaletteThreadItems({ activeThread: activeThread ?? null, threadSearchQuery });
-  // Recent means used recently: written in or opened, whichever is later.
+  // Recent means used recently: written in or opened, whichever is later. The
+  // open thread would always lead that list, so it is left out.
+  const activeThreadValue = activeThread
+    ? `thread:${activeThread.environmentId}:${activeThread.id}`
+    : null;
   const recentThreadItems = allThreadItems
+    .filter((item) => item.value !== activeThreadValue)
     .toSorted(
       (left, right) =>
         (right.threadSearch ? threadRecentUse(right.threadSearch) : 0) -
@@ -1315,7 +1320,10 @@ function OpenCommandPaletteDialog(props: {
     actionItems.push({
       kind: "action",
       value: "action:copy-thread-reference",
-      searchTerms: ["copy", "pull request", "pr link", "thread id", "reference"],
+      searchTerms:
+        activeThreadReferenceCopyTarget.kind === "pull-request"
+          ? ["copy", "pull request", "link", "reference"]
+          : ["copy", "thread id", "reference"],
       title:
         activeThreadReferenceCopyTarget.kind === "pull-request" ? "Copy PR link" : "Copy thread ID",
       description: activeThreadReferenceCopyTarget.value,

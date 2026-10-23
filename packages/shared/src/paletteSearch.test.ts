@@ -2,15 +2,16 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   findSearchTokenRanges,
-  firstSearchTokenOffset,
   foldSearchQuery,
   rankMessageMatches,
   rankSearchGroups,
   rankSearchItems,
   recordThreadOpen,
+  scoreMessageMatch,
   scoreSearchTerms,
   scoreThreadSearch,
   SEARCH_RECENCY_HALF_LIFE_MS,
+  type SearchTermsMatch,
   type ThreadSearchSubject,
 } from "./paletteSearch.ts";
 
@@ -190,7 +191,8 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     const threads = [thread("Fix sidebar lag"), thread("Unrelated work")];
     expect(rankTitles("fsl", threads)).toEqual(["Fix sidebar lag"]);
     expect(rankTitles("fixsid", threads)).toEqual(["Fix sidebar lag"]);
-    expect(rankTitles("fis", [thread("Feature: Fix sidebar lag")])).toEqual([
+    // A later "F" can start the run.
+    expect(rankTitles("fixsid", [thread("Feature: Fix sidebar lag")])).toEqual([
       "Feature: Fix sidebar lag",
     ]);
     expect(scoreThreadSearch("fsl", threads[0]!, NOW, { typos: true })?.titleRanges).toEqual([
@@ -207,8 +209,11 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
       thread("Simplify worktree thread creation"),
       thread("Start a new conversation"),
       thread("Setting up the sentinel"),
+      thread("I plan to open source all of lakebed in the next few weeks"),
+      thread("Design notes"),
+      thread("Link pull request to thread"),
     ];
-    for (const query of ["posthog", "cron", "stripe", "gpu", "fxsb"]) {
+    for (const query of ["posthog", "cron", "stripe", "gpu", "fxsb", "lint", "deno"]) {
       expect(rankTitles(query, threads), query).toEqual([]);
     }
   });
@@ -254,6 +259,27 @@ describe("rankMessageMatches", () => {
         .map((match) => match.key),
     ).toEqual(["b1", "b0", "a0"]);
   });
+
+  it("keeps matches inside words below word matches, however used", () => {
+    const busy = thread("Busy", {
+      activityAt: NOW,
+      opens: { openedAt: NOW, score: 20, queries: [] },
+    });
+    const quiet = thread("Quiet");
+    const matches = [
+      { key: "busy", rank: 0, midWord: true },
+      { key: "quiet", rank: 1 },
+    ];
+    const subjects = new Map([
+      ["busy", busy],
+      ["quiet", quiet],
+    ]);
+    expect(
+      rankMessageMatches(matches, (match) => subjects.get(match.key), "rust", NOW).map(
+        (match) => match.key,
+      ),
+    ).toEqual(["quiet", "busy"]);
+  });
 });
 
 describe("rankSearchGroups", () => {
@@ -274,16 +300,41 @@ describe("rankSearchGroups", () => {
   });
 });
 
-describe("rankSearchGroups with typos", () => {
-  it("puts a typo in a name above the same typo in another result's keywords", () => {
+describe("rankSearchGroups with keywords and picks", () => {
+  it("forgives typos in names but not in hidden keywords", () => {
     const groups = rankSearchGroups(
       [
-        { group: "actions", items: [["Open settings", "settings", "keybindings"]] },
+        { group: "actions", items: [["Open settings", "preferences", "keybindings"]] },
         { group: "settings", items: [["Keybindings", "General"]] },
       ],
       (terms, options) => scoreSearchTerms("keybindngs", terms, options),
     );
-    expect(groups.map(({ group }) => group)).toEqual(["settings", "actions"]);
+    expect(groups.map(({ group }) => group)).toEqual(["settings"]);
+    expect(scoreSearchTerms("duckdb", ["Search engine", "duckduckgo"], { typos: true })).toBeNull();
+    expect(scoreSearchTerms("rust", ["GitHub sharing", "trusted"])).toBeNull();
+  });
+
+  it("lists a thread named for the query above a command with it as a keyword, and picks first", () => {
+    const rank = (command: string[], subject: ThreadSearchSubject) =>
+      rankSearchGroups<string, string[] | ThreadSearchSubject, SearchTermsMatch>(
+        [
+          { group: "actions", items: [command] },
+          { group: "threads", items: [subject] },
+        ],
+        (item, options) => {
+          if (Array.isArray(item)) return scoreSearchTerms("mcp", item, options);
+          const match = scoreThreadSearch("mcp", item, NOW, options);
+          return match && { ...match, ranges: match.titleRanges };
+        },
+      ).map(({ group }) => group);
+    const named = thread("Trim MCP model lists");
+    const picked = thread("Trim MCP model lists", {
+      opens: { openedAt: NOW, pickedAt: NOW, score: 1, queries: ["mcp"] },
+    });
+    expect(rank(["Restart agent session", "reload", "mcp"], named)).toEqual(["threads", "actions"]);
+    // A command named for the query stays first, unless the thread was picked for it.
+    expect(rank(["Reload MCP servers"], named)).toEqual(["actions", "threads"]);
+    expect(rank(["Reload MCP servers"], picked)).toEqual(["threads", "actions"]);
   });
 });
 
@@ -318,10 +369,29 @@ describe("findSearchTokenRanges", () => {
     ]);
   });
 
-  it("places snippets and highlights a three-letter token only where it starts a word", () => {
-    const text = `Saved the drafts. ${"More notes. ".repeat(40)}Then enableFTS and Enable FTS.`;
-    expect(text.slice(firstSearchTokenOffset(text, "fts"))).toMatch(/^FTS and/);
+  it("highlights a three-letter token only where it starts a word", () => {
     expect(findSearchTokenRanges("drafts, enableFTS", "fts")).toEqual([{ start: 14, end: 17 }]);
-    expect(firstSearchTokenOffset("This addresses Résumé indexing", "res")).toBe(15);
+  });
+});
+
+describe("scoreMessageMatch", () => {
+  it("needs short words at a word start and ranks other words found inside words lower", () => {
+    const text = `Saved the drafts. ${"More notes. ".repeat(40)}Then enableFTS and Enable FTS.`;
+    const fts = scoreMessageMatch(text, "fts");
+    expect(fts?.quality).toBe(1);
+    expect(text.slice(fts?.offset)).toMatch(/^FTS and/);
+    expect(scoreMessageMatch("saved two drafts", "fts")).toBeNull();
+    expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
+    expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
+    expect(scoreMessageMatch("v12rc build", "rc")?.quality).toBe(1);
+  });
+
+  it("finds words through case and accents, also after the same letters inside a word", () => {
+    expect(scoreMessageMatch("This addresses Résumé indexing", "res")).toEqual({
+      quality: 1,
+      offset: 15,
+    });
+    expect(scoreMessageMatch("Le CAFÉ ouvert", "cafe")).toEqual({ quality: 1, offset: 3 });
+    expect(scoreMessageMatch("明天部署到生产环境", "部署")).toEqual({ quality: 1, offset: 2 });
   });
 });

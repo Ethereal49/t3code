@@ -229,8 +229,9 @@ function matchToken(
 /**
  * Initials and word-start runs: each next letter of `token` either directly
  * follows the last one or starts a later word, so "fsl" and "fixsid" find
- * "Fix sidebar lag", as in VS Code. Scattered letters would find any long
- * title ("cron" in "creation"). Weakest match, tried last.
+ * "Fix sidebar lag", as in VS Code. Every run but the last is one letter or
+ * a whole word. Scattered letters would find any long title ("cron" in
+ * "creation"). Weakest match, tried last.
  */
 function matchInitials(field: SearchField, token: string): TokenMatch | null {
   if (token.length < 3 || DIGIT.test(token)) return null;
@@ -242,10 +243,17 @@ function matchInitials(field: SearchField, token: string): TokenMatch | null {
   };
   const runFrom = (start: number) => {
     const letters: SearchRange[] = [{ start, end: start + 1 }];
+    let runStart = start;
     for (const letter of token.slice(1)) {
       const after = letters.at(-1)!.end;
       const at = field.text[after] === letter ? after : nextWordStart(after, letter);
       if (at === -1) return null;
+      // Before the next word, a run is an initial or a whole word of three or
+      // more letters ("fix" in "fixsid"). Anything else is a coincidence:
+      // "lint" is not "Lin(k) t(hread)" or "l(akebed) in t(he)".
+      const run = after - runStart;
+      if (at !== after && run > 1 && (run < 3 || after !== wordEnd(field, runStart))) return null;
+      if (at !== after) runStart = at;
       letters.push({ start: at, end: at + 1 });
     }
     return letters;
@@ -267,6 +275,11 @@ interface WeightedSearchField {
   readonly weight: number;
   /** Only a whole-word match counts, as for a short query against keywords. */
   readonly wholeWords?: boolean;
+  /**
+   * Only a match at a word start counts, without typos: hidden keywords that
+   * matched loosely would list results the user cannot see why for.
+   */
+  readonly keyword?: boolean;
 }
 
 interface SearchFieldsMatch {
@@ -313,6 +326,7 @@ function matchSearchFields(
       field: prepareSearchField(field.value),
       weight: field.weight,
       wholeWords: field.wholeWords ?? false,
+      keyword: field.keyword ?? false,
     }));
   const primary = fields[0]?.value ? prepared[0]?.field : undefined;
   const tokens = normalizedQuery.split(" ");
@@ -323,12 +337,12 @@ function matchSearchFields(
     let best = 0;
     let bestPrimary: TokenMatch | null = null;
     let atWordStart = false;
-    for (const { field, weight, wholeWords } of prepared) {
+    for (const { field, weight, wholeWords, keyword } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
-      const typos = options?.typos ?? false;
+      const typos = (options?.typos ?? false) && !keyword;
       // Initials only count in the name.
       const match = matchToken(field, token, typos, typos && field === primary);
-      if (match === null || (wholeWords && match.score < WHOLE_WORD)) continue;
+      if (match === null || match.score < (wholeWords ? WHOLE_WORD : keyword ? 0.7 : 0)) continue;
       if (field === primary) bestPrimary = match;
       if (match.score >= 0.7) atWordStart = true;
       if (match.score * weight > best) best = match.score * weight;
@@ -379,47 +393,101 @@ export function messageSearchTokens(query: string): {
   };
 }
 
-/**
- * Whether a message token must start a word. Short tokens match inside too
- * many words ("fts" in "drafts"). Only plain ASCII tokens are checked: the
- * server checks with SQLite GLOB patterns built from them.
- */
-export function messageTokenNeedsWordStart(token: string): boolean {
-  return token.length < 4 && /^[a-z0-9]+$/.test(token);
+// A message token shorter than this must start a word: "fts" is not in "drafts".
+const MESSAGE_WORD_START_LENGTH = 4;
+// Accented Latin letters by the letter they fold to: "e" -> "èéêë…".
+let accentedLettersCache: Map<string, string> | null = null;
+function accentedLetters(): Map<string, string> {
+  if (accentedLettersCache) return accentedLettersCache;
+  accentedLettersCache = new Map();
+  for (let code = 0xc0; code <= 0x24f; code++) {
+    const character = String.fromCharCode(code);
+    const letter = foldCharacter(character);
+    if (/^[a-z]$/.test(letter)) {
+      accentedLettersCache.set(letter, (accentedLettersCache.get(letter) ?? "") + character);
+    }
+  }
+  return accentedLettersCache;
 }
 
-// The first character of a word in `text`, as `foldSearchField` decides it.
+/**
+ * Matches text that holds an accented form of a letter in `token`, or null
+ * when no letter has one. Only such text can hold the token through accents
+ * ("res" in "Résumé"), so only it is folded, which is slow on long text.
+ */
+function accentedFormsOf(token: string): RegExp | null {
+  const forms = Array.from(new Set(token), (letter) => accentedLetters().get(letter) ?? "").join(
+    "",
+  );
+  return forms ? new RegExp(`[${forms}]`) : null;
+}
+
+// Where a word starts in `text`, by the rules of `foldSearchField`.
 function startsWordAt(text: string, index: number): boolean {
   if (index === 0) return true;
   const previous = text[index - 1]!;
+  const character = text[index]!;
   return (
     !ALPHANUMERIC.test(previous) ||
-    (LOWERCASE.test(previous) && UPPERCASE.test(text[index]!)) ||
-    DIGIT.test(previous) !== DIGIT.test(text[index]!)
+    (LOWERCASE.test(previous) && UPPERCASE.test(character)) ||
+    DIGIT.test(previous) !== DIGIT.test(character) ||
+    isCjk(character)
   );
 }
 
+export interface MessageMatch {
+  /** 1 when every token starts a word, MID_WORD when one only appears inside words. */
+  readonly quality: number;
+  /** Where a snippet should start to show the match. */
+  readonly offset: number;
+}
+
 /**
- * Where the first message search token starts in `text`, or 0. A short token
- * counts only where it starts a word, as on the server ("fts" in "Enable FTS",
- * not in "drafts"). Messages can be long, so a plain lowercase search goes
- * first; folding accents ("cafe" in "café") only runs when that misses.
+ * How a message matches a query, so message hits rank like titles, or null
+ * when a short token never starts a word in it ("fts" in "drafts"). Case and
+ * accents are ignored, as in the server's index. Tokens too short for the
+ * index ("12" in "pnpm 12") are the caller's to check.
  */
-export function firstSearchTokenOffset(text: string, query: string): number {
+export function scoreMessageMatch(text: string, query: string): MessageMatch | null {
   const lowerText = text.toLowerCase();
-  const offsets = messageSearchTokens(query).long.flatMap((token) => {
+  let folded: SearchField | null = null;
+  let quality = 1;
+  let offset = -1;
+  for (const token of messageSearchTokens(query).long) {
+    const short = Array.from(token).length < MESSAGE_WORD_START_LENGTH;
+    const accents = short ? accentedFormsOf(token) : null;
+    let first = -1;
+    let wordStart = -1;
     for (
       let index = lowerText.indexOf(token);
-      index !== -1;
+      index !== -1 && wordStart === -1;
       index = lowerText.indexOf(token, index + 1)
     ) {
-      if (!messageTokenNeedsWordStart(token) || startsWordAt(text, index)) return [index];
+      if (first === -1) first = index;
+      if (startsWordAt(text, index)) wordStart = index;
     }
-    return [];
-  });
-  if (offsets.length > 0) return Math.min(...offsets);
-  // Folding is per character, so bound it for very long messages.
-  return findSearchTokenRanges(text.slice(0, 20_000), query)[0]?.start ?? 0;
+    if (first === -1 || (wordStart === -1 && accents?.test(text))) {
+      // Folding is per character, so bound it for very long messages.
+      folded ??= foldSearchField(text.slice(0, 20_000));
+      const foldedToken = foldSearchQuery(token);
+      for (
+        let index = folded.text.indexOf(foldedToken);
+        index !== -1 && wordStart === -1;
+        index = folded.text.indexOf(foldedToken, index + 1)
+      ) {
+        const source = folded.sourceIndex?.[index] ?? index;
+        if (first === -1) first = source;
+        if (folded.wordStarts[index]) wordStart = source;
+      }
+    }
+    if (wordStart === -1) {
+      if (short) return null;
+      quality = MID_WORD;
+    }
+    const at = wordStart === -1 ? first : wordStart;
+    if (at !== -1 && (offset === -1 || at < offset)) offset = at;
+  }
+  return { quality, offset: Math.max(offset, 0) };
 }
 
 /**
@@ -431,7 +499,8 @@ export function firstSearchTokenOffset(text: string, query: string): number {
 export function findSearchTokenRanges(text: string, query: string): SearchRange[] {
   const tokens = new Map(
     messageSearchTokens(query).long.map(
-      (token) => [foldSearchQuery(token), messageTokenNeedsWordStart(token)] as const,
+      (token) =>
+        [foldSearchQuery(token), Array.from(token).length < MESSAGE_WORD_START_LENGTH] as const,
     ),
   );
   if (tokens.size === 0) return [];
@@ -605,6 +674,8 @@ export interface ThreadSearchMatch {
   readonly titleRanges: ReadonlyArray<SearchRange>;
   /** Why the thread matched when its title shows no match, for the result row. */
   readonly hint?: SearchMatchHint;
+  /** Picked before for this query; see `rankSearchGroups`. */
+  readonly picked?: boolean;
 }
 
 export interface SearchMatchHint {
@@ -698,6 +769,7 @@ export function scoreThreadSearch(
     strong: match.strong,
     titleRanges: match.primaryRanges,
     ...(hint ? { hint } : {}),
+    ...(boost > 0 ? { picked: true } : {}),
   };
 }
 
@@ -707,11 +779,14 @@ export function threadRecentUse(thread: ThreadSearchSubject): number {
 }
 
 /**
- * Orders message matches from the server by the same use and pick signals as
- * title matches. `rank` is the match's position in its own environment's
+ * Orders message matches from the server: matches where every query word
+ * starts a word first, as for titles, then by the same use and pick signals
+ * as title matches. `rank` is the match's position in its own environment's
  * results, which stand in for text relevance, so environments merge fairly.
  */
-export function rankMessageMatches<T extends { readonly rank: number }>(
+export function rankMessageMatches<
+  T extends { readonly rank: number; readonly midWord?: boolean | undefined },
+>(
   matches: ReadonlyArray<T>,
   subjectOf: (match: T) => ThreadSearchSubject | undefined,
   normalizedQuery: string,
@@ -724,7 +799,11 @@ export function rankMessageMatches<T extends { readonly rank: number }>(
       const use = threadUsageBoost(subject, now) + pickBoost(subject, normalizedQuery, now);
       return [{ match, score: use / (1 + 0.15 * match.rank) }];
     })
-    .sort((left, right) => right.score - left.score)
+    .sort(
+      (left, right) =>
+        Number(left.match.midWord === true) - Number(right.match.midWord === true) ||
+        right.score - left.score,
+    )
     .map(({ match }) => match);
 }
 
@@ -751,7 +830,9 @@ export interface RankedSearchItem<T, M> {
 /**
  * Ranks grouped items, best score first within each group. Groups with no
  * match are dropped. The rest order by the class of their best match (word
- * starts, typos in a name, or weaker), and ties keep the given order. Classes
+ * starts in a name, typos in a name or keyword matches, or weaker), one class
+ * higher for a result picked before for the query, and ties keep the given
+ * order. Classes
  * rather than scores keep the group order steady while a word is typed, and
  * keep use, which only counts for threads, from outweighing a command that
  * matches as well.
@@ -764,7 +845,12 @@ export interface RankedSearchItem<T, M> {
 export function rankSearchGroups<
   G,
   T,
-  M extends { readonly score: number; readonly quality: number; readonly strong: boolean },
+  M extends {
+    readonly score: number;
+    readonly quality: number;
+    readonly strong: boolean;
+    readonly picked?: boolean;
+  },
 >(
   groups: ReadonlyArray<{ readonly group: G; readonly items: ReadonlyArray<T> }>,
   score: (item: T, options: { readonly typos: boolean }, group: G) => M | null,
@@ -785,7 +871,9 @@ export function rankSearchGroups<
     .flatMap(({ group, ranked: items }, order) => {
       if (items.length === 0) return [];
       const sorted = [...items].sort((left, right) => right.match.score - left.match.score);
-      const best = Math.max(...items.map(({ match }) => matchClass(match.quality)));
+      const best = Math.max(
+        ...items.map(({ match }) => matchClass(match.quality) + (match.picked ? 1 : 0)),
+      );
       return [{ group, ranked: sorted, best, order }];
     })
     .sort((left, right) => right.best - left.best || left.order - right.order)
@@ -810,14 +898,17 @@ export interface SearchTermsMatch {
   readonly ranges: ReadonlyArray<SearchRange>;
 }
 
+const KEYWORD_QUALITY = 0.65;
 // Below this, keyword prefixes match too much: "co" or "pro" would list most
 // settings. A short query still matches a keyword it equals ("pr").
 const KEYWORD_QUERY_MIN_LENGTH = 4;
 
 /**
  * Scores a non-thread result such as a command or project. The first term
- * names it; the others are keywords that help it match but count less. For
- * queries under four characters a keyword must match a whole word.
+ * names it; the others are keywords that help it match but count less, so a
+ * keyword match ranks a group below a name match ("mcp" finds the thread
+ * named for it before a command with that keyword). Keywords match only at
+ * word starts, and for queries under four characters only as whole words.
  */
 export function scoreSearchTerms(
   normalizedQuery: string,
@@ -830,17 +921,18 @@ export function scoreSearchTerms(
     terms.map((value, index) =>
       index === 0
         ? { value, weight: 1 }
-        : // An alias typed in full ("pr") is a deliberate name, above a mere title prefix.
-          short
-          ? { value, weight: 0.8, wholeWords: true }
-          : { value, weight: 0.6 },
+        : // An alias typed in full ("pr") is deliberate, above a mere name prefix.
+          { value, weight: short ? 0.8 : 0.6, wholeWords: short, keyword: true },
     ),
     options,
   );
   return (
     match && {
       score: match.quality,
-      quality: match.quality,
+      // Below the word-start class: a match only in hidden keywords must not put
+      // its group above a result whose name matches.
+      quality:
+        match.primaryRanges.length > 0 ? match.quality : Math.min(match.quality, KEYWORD_QUALITY),
       strong: match.strong,
       ranges: match.primaryRanges,
     }

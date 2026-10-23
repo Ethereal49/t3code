@@ -1,5 +1,8 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import {
+  claimThreadOpen,
+  type EnvironmentThreadSearchMatch,
+} from "@t3tools/client-runtime/state/thread-search";
 import {
   foldSearchQuery,
   rankMessageMatches,
@@ -140,13 +143,13 @@ export function useCommandPaletteThreadItems(input: {
       );
     },
     runThread: async (thread) => {
-      // The pick is an open with its query. The thread view also records the
-      // open; the server merges the two.
+      // The pick is an open with its query, so the thread view skips its own.
       if (
         threadSearchQuery.trim().length > 0 &&
         !threadSearchQuery.startsWith(">") &&
         thread.lastVisitedAt !== undefined
       ) {
+        claimThreadOpen(thread.environmentId, thread.id, Date.now());
         void visitThread({
           environmentId: thread.environmentId,
           input: {

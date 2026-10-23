@@ -482,9 +482,14 @@ function rankPaletteItem(
     const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
     return match && { ...match, ranges: match.titleRanges };
   }
-  const match = scoreSearchTerms(normalizedQuery, item.searchTerms, options);
-  // Ranges index the first search term, so they only highlight a title that is that term.
-  return match && (item.title === item.searchTerms[0] ? match : { ...match, ranges: [] });
+  // The title names the item; search terms are keywords. Ranges index the
+  // first term, so they only highlight a title that is that term.
+  const terms =
+    typeof item.title === "string" && item.title !== item.searchTerms[0]
+      ? [item.title, ...item.searchTerms]
+      : item.searchTerms;
+  const match = scoreSearchTerms(normalizedQuery, terms, options);
+  return match && (item.title === terms[0] ? match : { ...match, ranges: [] });
 }
 
 /**

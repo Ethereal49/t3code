@@ -9,6 +9,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it } from "vite-plus/test";
 
 import {
+  claimThreadOpen,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   threadSearchMatchKey,
@@ -122,4 +123,12 @@ it("keeps the previous results visible only while a refined or widened query is 
   expect(visibleThreadSearch("billing", null, previous)).toEqual({ query: "", matches: [] });
   const ready = { query: "websocke", matches: [] };
   expect(visibleThreadSearch("websocke", ready, previous)).toBe(ready);
+});
+
+it("sends one open per thread every ten minutes by this client's clock", () => {
+  const minute = 60_000;
+  expect(claimThreadOpen(envA, "thread-open", 0)).toBe(true);
+  expect(claimThreadOpen(envA, "thread-open", 9 * minute)).toBe(false);
+  expect(claimThreadOpen(envB, "thread-open", 9 * minute)).toBe(true);
+  expect(claimThreadOpen(envA, "thread-open", 10 * minute)).toBe(true);
 });

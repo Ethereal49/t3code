@@ -1,6 +1,7 @@
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
 import {
+  claimThreadOpen,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -432,8 +433,13 @@ export function CommandPalette(props: {
       foldSearchQuery(query),
       now,
     ).map(keyOf);
-    return filterCommandPaletteItems(items, query, messageMatchKeys, now);
-  }, [items, now, query, search.matches]);
+    const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);
+    // Recent threads leave out the open one, which would always lead them.
+    const activeKey = activeThread
+      ? scopedThreadKey(activeThread.environmentId, activeThread.id)
+      : null;
+    return query.trim() ? ranked : ranked.filter((item) => item.key !== activeKey);
+  }, [activeThread, items, now, query, search.matches]);
   // The pick is an open with its query. The thread view also records the open;
   // the server merges the two.
   const runResult = (item: CommandPaletteResult) => {
@@ -444,6 +450,7 @@ export function CommandPalette(props: {
           )
         : undefined;
     if (thread && thread.lastVisitedAt !== undefined) {
+      claimThreadOpen(thread.environmentId, thread.id, Date.now());
       void visitThread({
         environmentId: thread.environmentId,
         input: {

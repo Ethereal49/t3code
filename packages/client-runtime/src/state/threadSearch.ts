@@ -7,11 +7,31 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { foldSearchQuery, type ThreadSearchSubject } from "@t3tools/shared/paletteSearch";
+import {
+  foldSearchQuery,
+  THREAD_OPEN_DEDUPE_MS,
+  type ThreadSearchSubject,
+} from "@t3tools/shared/paletteSearch";
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 
 import type { EnvironmentThreadShell } from "./models.ts";
 import { getThreadSortTimestamp } from "./threadSort.ts";
+
+// When this client last sent an open per thread, by its own clock: a server
+// timestamp would be off by any clock skew. The server merges opens closer
+// together than THREAD_OPEN_DEDUPE_MS anyway, so skipping them saves a command
+// and a broadcast while flipping between threads.
+const sentThreadOpens = new Map<string, number>();
+
+/** Whether to send an open of a thread now; when it is, records that it was sent. */
+export function claimThreadOpen(environmentId: EnvironmentId, threadId: string, now: number) {
+  const key = `${environmentId}:${threadId}`;
+  if (now - (sentThreadOpens.get(key) ?? Number.NEGATIVE_INFINITY) < THREAD_OPEN_DEDUPE_MS) {
+    return false;
+  }
+  sentThreadOpens.set(key, now);
+  return true;
+}
 
 export interface EnvironmentThreadSearchMatch extends OrchestrationThreadSearchMatch {
   readonly environmentId: EnvironmentId;

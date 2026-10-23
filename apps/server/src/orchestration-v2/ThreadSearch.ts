@@ -16,12 +16,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
-  firstSearchTokenOffset,
   messageSearchTokens,
-  messageTokenNeedsWordStart,
   foldSearchQuery,
   rankMessageMatches,
   rankSearchItems,
+  scoreMessageMatch,
   scoreThreadSearch,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
@@ -40,17 +39,6 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   }
 }
 
-const WordStart = Schema.Struct({
-  /** The plain token, checked against the lowercased text. */
-  word: Schema.String,
-  /** The token as a capital after a lowercase letter ("enableFTS"). */
-  camel: Schema.String,
-  /** Accent-insensitive patterns, for hits the index matched through accents. */
-  accented: Schema.Array(Schema.String),
-  /** Matches text with an accented form of a token letter, or null when none has one. */
-  accents: Schema.NullOr(Schema.String),
-});
-
 // Token lists bind as JSON arrays, so any number of them is one parameter.
 const TokenList = Schema.fromJsonString(Schema.Array(Schema.String));
 const SearchRequest = Schema.Struct({
@@ -58,67 +46,21 @@ const SearchRequest = Schema.Struct({
   match: Schema.NullOr(Schema.String),
   /** Tokens every hit must contain, checked on the text. */
   substrings: TokenList,
-  /** Short tokens that must start a word in the hit. */
-  wordStarts: Schema.fromJsonString(Schema.Array(WordStart)),
   projectId: Schema.NullOr(ProjectId),
-  limit: Schema.Int,
 });
 const SearchRow = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   source: OrchestrationThreadSearchSource,
-  matchText: Schema.String,
+  text: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
+  score: Schema.Number,
 });
 
 const SNIPPET_LENGTH = 240;
+// The newest hits checked per query. A common word stops here instead of
+// reading every message, so time stays flat as history grows.
 const MESSAGE_HIT_LIMIT = 2000;
-
-// Latin letters with their accented forms. SQLite's GLOB is case-sensitive
-// and knows no accents, so each letter becomes a class of every form.
-const LETTER_FORMS: Readonly<Record<string, string>> = {
-  a: "aàáâãäåāăą",
-  c: "cçćĉċč",
-  e: "eèéêëēĕėęě",
-  i: "iìíîïĩīĭįı",
-  n: "nñńņň",
-  o: "oòóôõöøōŏő",
-  s: "sśŝşš",
-  u: "uùúûüũūŭůűų",
-  y: "yýÿŷ",
-  z: "zźżž",
-};
-const WORD_CHARACTERS = `a-zA-Z0-9${Object.values(LETTER_FORMS).join("")}${Object.values(
-  LETTER_FORMS,
-)
-  .join("")
-  .toUpperCase()}`;
-
-function letterClass(letter: string): string {
-  const forms = LETTER_FORMS[letter] ?? letter;
-  return `[${forms}${forms.toUpperCase()}]`;
-}
-
-/**
- * How the server checks that a short ASCII `token` starts a word in a hit.
- * Most hits contain the token as typed, so cheap lowercase patterns come first.
- * The accent-aware ones are slow on long text, so they only run when the text
- * has an accented form of a token letter ("res" in "This addresses Résumé").
- */
-function wordStart(token: string): typeof WordStart.Type {
-  const caseless = (letter: string) => `[${letter}${letter.toUpperCase()}]`;
-  const accentedWord = `${Array.from(token, letterClass).join("")}*`;
-  const accents = Array.from(token, (letter) => LETTER_FORMS[letter]?.slice(1) ?? "").join("");
-  const nonAscii = Array.from(new Set(`${accents}${accents.toUpperCase()}`))
-    .filter((letter) => letter.codePointAt(0)! > 0x7f)
-    .join("");
-  return {
-    word: token,
-    camel: `*[a-z]${token[0]!.toUpperCase()}${Array.from(token.slice(1), caseless).join("")}*`,
-    accented: [accentedWord, `*[^${WORD_CHARACTERS}]${accentedWord}`],
-    accents: nonAscii ? `*[${nonAscii}]*` : null,
-  };
-}
 
 /**
  * The SQL inputs for a message search, or null when the query has no token
@@ -129,7 +71,7 @@ function wordStart(token: string): typeof WordStart.Type {
 function buildMessageSearch(
   query: string,
   hasIndex: boolean,
-): Omit<typeof SearchRequest.Type, "projectId" | "limit"> | null {
+): Omit<typeof SearchRequest.Type, "projectId"> | null {
   const { long, short } = messageSearchTokens(query);
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
@@ -137,7 +79,6 @@ function buildMessageSearch(
   return {
     match: indexed ? long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ") : null,
     substrings: indexed ? short : [...long, ...short],
-    wordStarts: [...long, ...short].filter(messageTokenNeedsWordStart).map(wordStart),
   };
 }
 
@@ -146,12 +87,11 @@ const SNIPPET_LEAD = 24;
 
 /**
  * Up to 240 characters starting a few words before the first match, with
- * ellipses where the text was cut. Messages can be long, so this finds the
- * match with a plain lowercase search rather than folding the whole text.
+ * ellipses where the text was cut.
  */
 export function buildSearchSnippet(text: string, query: string): string {
   const normalizedText = text.replace(/\s+/g, " ").trim();
-  const matchStart = firstSearchTokenOffset(normalizedText, query);
+  const matchStart = scoreMessageMatch(normalizedText, query)?.offset ?? 0;
   if (normalizedText.length <= SNIPPET_LENGTH && matchStart <= SNIPPET_LEAD * 2) {
     return normalizedText;
   }
@@ -201,12 +141,11 @@ export class ThreadSearch extends Context.Service<
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // One message per active, non-subagent thread: a user message when one
-  // matches, since that is what the user remembers asking. Threads order by
-  // their best bm25 hit, or by recency when scanning. Every palette and sidebar
-  // hides subagent threads, so their messages would only use up the limit.
-  // Filters apply before ranking, so hidden threads never crowd out a visible
-  // match, and message bodies are read only for the winners.
+  // The newest messages that hold every token, from active, non-subagent
+  // threads. Every palette and sidebar hides subagent threads, so their
+  // messages would only use up the hit limit; filters apply before it, so
+  // hidden threads never crowd out a visible match. Word starts and ranking
+  // happen in JS, with the rules titles use.
   //
   // Without the index (an SQLite build without FTS5 trigrams, see migration
   // 69) or for two-character CJK words, the same query scans the messages
@@ -214,9 +153,9 @@ export const make = Effect.gen(function* () {
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ match, substrings, wordStarts, projectId, limit }) => sql`
+    execute: ({ match, substrings, projectId }) => sql`
       WITH eligible AS MATERIALIZED (
-        SELECT threads.thread_id
+        SELECT threads.thread_id, threads.project_id
         FROM orchestration_v2_projection_threads AS threads
         INNER JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
@@ -226,107 +165,42 @@ export const make = Effect.gen(function* () {
           AND (${projectId} IS NULL OR threads.project_id = ${projectId})
           AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
             IS NOT 'subagent'
-      ),
-      hits AS (
-        ${
-          match === null
-            ? sql`
-              SELECT
-                messages.rowid AS message_rowid,
-                messages.thread_id,
-                messages.role,
-                messages.created_at,
-                messages.message_id,
-                0 AS score
-              FROM orchestration_v2_projection_messages AS messages
-              WHERE ${indexedMessageCondition(sql)}
-            `
-            : sql`
-              SELECT
-                orchestration_v2_message_search.rowid AS message_rowid,
-                messages.thread_id,
-                messages.role,
-                messages.created_at,
-                messages.message_id,
-                bm25(orchestration_v2_message_search) AS score
-              FROM orchestration_v2_message_search
-              INNER JOIN orchestration_v2_projection_messages AS messages
-                ON messages.rowid = orchestration_v2_message_search.rowid
-              WHERE orchestration_v2_message_search MATCH ${match}
-            `
-        }
-          AND messages.thread_id IN eligible
-          AND NOT EXISTS (
-            SELECT 1 FROM json_each(${substrings}) AS token
-            WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM json_each(${wordStarts}) AS token
-            WHERE NOT (
-              CASE
-                WHEN instr(
-                  lower(json_extract(messages.payload_json, '$.text')),
-                  json_extract(token.value, '$.word')
-                ) > 0
-                AND (
-                  lower(json_extract(messages.payload_json, '$.text'))
-                    GLOB json_extract(token.value, '$.word') || '*'
-                  OR lower(json_extract(messages.payload_json, '$.text'))
-                    GLOB '*[^a-z0-9]' || json_extract(token.value, '$.word') || '*'
-                  OR json_extract(messages.payload_json, '$.text')
-                    GLOB json_extract(token.value, '$.camel')
-                )
-                THEN 1
-                WHEN instr(
-                  lower(json_extract(messages.payload_json, '$.text')),
-                  json_extract(token.value, '$.word')
-                ) > 0
-                AND (
-                  json_extract(token.value, '$.accents') IS NULL
-                  OR NOT json_extract(messages.payload_json, '$.text')
-                    GLOB json_extract(token.value, '$.accents')
-                )
-                THEN 0
-                ELSE EXISTS (
-                  SELECT 1 FROM json_each(token.value, '$.accented') AS pattern
-                  WHERE json_extract(messages.payload_json, '$.text') GLOB pattern.value
-                )
-              END
-            )
-          )
-        -- Newest hits first, and only so many: a very common word stops early
-        -- instead of checking every message. Hidden threads are already out.
-        ORDER BY message_rowid DESC
-        LIMIT ${MESSAGE_HIT_LIMIT}
-      ),
-      ranked AS (
-        SELECT
-          hits.*,
-          MIN(score) OVER (PARTITION BY thread_id) AS thread_score,
-          ROW_NUMBER() OVER (
-            PARTITION BY thread_id
-            ORDER BY
-              CASE role WHEN 'user' THEN 0 ELSE 1 END ASC,
-              score ASC,
-              created_at DESC,
-              message_id ASC
-          ) AS thread_match_rank
-        FROM hits
       )
-      SELECT
-        ranked.thread_id AS "threadId",
-        threads.project_id AS "projectId",
-        ranked.role AS source,
-        json_extract(messages.payload_json, '$.text') AS "matchText",
-        ranked.created_at AS "messageCreatedAt"
-      FROM ranked
-      INNER JOIN orchestration_v2_projection_messages AS messages
-        ON messages.rowid = ranked.message_rowid
-      INNER JOIN orchestration_v2_projection_threads AS threads
-        ON threads.thread_id = ranked.thread_id
-      WHERE ranked.thread_match_rank = 1
-      ORDER BY ranked.thread_score ASC, ranked.created_at DESC, ranked.thread_id ASC
-      LIMIT ${limit}
+      ${
+        match === null
+          ? sql`
+            SELECT
+              messages.thread_id AS "threadId",
+              eligible.project_id AS "projectId",
+              messages.role AS source,
+              json_extract(messages.payload_json, '$.text') AS text,
+              messages.created_at AS "messageCreatedAt",
+              0 AS score
+            FROM orchestration_v2_projection_messages AS messages
+            INNER JOIN eligible ON eligible.thread_id = messages.thread_id
+            WHERE ${indexedMessageCondition(sql)}
+          `
+          : sql`
+            SELECT
+              messages.thread_id AS "threadId",
+              eligible.project_id AS "projectId",
+              messages.role AS source,
+              json_extract(messages.payload_json, '$.text') AS text,
+              messages.created_at AS "messageCreatedAt",
+              bm25(orchestration_v2_message_search) AS score
+            FROM orchestration_v2_message_search
+            INNER JOIN orchestration_v2_projection_messages AS messages
+              ON messages.rowid = orchestration_v2_message_search.rowid
+            INNER JOIN eligible ON eligible.thread_id = messages.thread_id
+            WHERE orchestration_v2_message_search MATCH ${match}
+          `
+      }
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(${substrings}) AS token
+          WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
+        )
+      ORDER BY messages.rowid DESC
+      LIMIT ${MESSAGE_HIT_LIMIT}
     `,
   });
 
@@ -380,20 +254,36 @@ export const make = Effect.gen(function* () {
         `;
         const messageSearch = buildMessageSearch(input.query, index.length > 0);
         if (messageSearch === null) return [];
-        return yield* searchRows({
-          ...messageSearch,
-          projectId: input.projectId,
-          limit: input.limit ?? 50,
-        });
+        return yield* searchRows({ ...messageSearch, projectId: input.projectId });
       }),
     );
+    // One message per thread: one where every word starts a word, then what the
+    // user wrote, since that is what they remember asking, then the best text
+    // match. Rows arrive newest first, so ties keep the newest.
+    type Hit = { readonly row: (typeof rows)[number]; readonly quality: number };
+    const compareHits = (left: Hit, right: Hit) =>
+      right.quality - left.quality ||
+      Number(left.row.source !== "user") - Number(right.row.source !== "user") ||
+      left.row.score - right.row.score;
+    const best = new Map<ThreadId, Hit>();
+    for (const row of rows) {
+      const match = scoreMessageMatch(row.text, input.query);
+      if (match === null) continue;
+      const hit = { row, quality: match.quality };
+      const current = best.get(row.threadId);
+      if (current === undefined || compareHits(hit, current) < 0) best.set(row.threadId, hit);
+    }
+    const ranked = [...best.values()].sort(
+      (left, right) => right.quality - left.quality || left.row.score - right.row.score,
+    );
     return {
-      matches: rows.map((row) => ({
+      matches: ranked.slice(0, input.limit ?? 50).map(({ row, quality }) => ({
         threadId: row.threadId,
         projectId: row.projectId,
         source: row.source,
-        snippet: buildSearchSnippet(row.matchText, input.query),
+        snippet: buildSearchSnippet(row.text, input.query),
         messageCreatedAt: row.messageCreatedAt,
+        ...(quality < 1 ? { midWord: true as const } : {}),
       })),
     };
   });
@@ -451,7 +341,7 @@ export const make = Effect.gen(function* () {
       (match) => subjectById.get(match.threadId),
       normalizedQuery,
       now,
-    ).map(({ rank: _rank, ...match }) => ({
+    ).map(({ rank: _rank, midWord: _midWord, ...match }) => ({
       ...match,
       title: subjectById.get(match.threadId)!.title,
     }));
