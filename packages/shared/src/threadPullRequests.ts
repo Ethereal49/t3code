@@ -288,6 +288,38 @@ export function resolveThreadPullRequestBadge(
   return { kind: "pull-request", others: visible.length - 1, state };
 }
 
+export interface ThreadSearchPullRequest {
+  readonly number: number;
+  readonly title: string | null;
+  /** `owner/repo#123` and the pull request URL, matched only by a whole query. */
+  readonly references: ReadonlyArray<string>;
+}
+
+/** Pull requests thread search matches; the same set as the terms below. */
+export function threadSearchPullRequests(thread: {
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
+  readonly linkedPullRequest?: ThreadLinkedPullRequest | null | undefined;
+  readonly branchPullRequest?: ThreadLinkedPullRequest | null | undefined;
+}): ThreadSearchPullRequest[] {
+  const entry = (
+    link: Pick<ThreadLinkedPullRequest, "number" | "repository" | "url">,
+    title: string | null,
+  ): ThreadSearchPullRequest => ({
+    number: link.number,
+    title,
+    references: [`${link.repository}#${link.number}`, link.url],
+  });
+  const branch = thread.branchPullRequest ? [entry(thread.branchPullRequest, null)] : [];
+  if (thread.pullRequests !== undefined && thread.pullRequests.length > 0) {
+    return branch.concat(
+      visibleThreadPullRequests(thread.pullRequests).map((link) =>
+        entry(link, link.snapshot?.title ?? null),
+      ),
+    );
+  }
+  return thread.linkedPullRequest ? branch.concat(entry(thread.linkedPullRequest, null)) : branch;
+}
+
 export function threadPullRequestSearchTerms(thread: {
   readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null | undefined;

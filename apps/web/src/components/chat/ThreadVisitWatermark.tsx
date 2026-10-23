@@ -1,6 +1,7 @@
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { takeThreadSearchPick } from "@t3tools/client-runtime/state/thread-search";
 import { useEffect, useRef } from "react";
 import { useUiStateStore } from "../../uiStateStore";
 import { threadEnvironment } from "../../state/threads";
@@ -25,6 +26,35 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
   const visitThreadMutation = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const lastDispatchedVisitRef = useRef<string | null>(null);
   const lastVisitDispatchAtRef = useRef(0);
+  const recordedOpenRef = useRef<string | null>(null);
+
+  // Opening a thread is one visit that also counts toward search ranking, with
+  // the palette query that picked it. It runs before the watermark effect,
+  // which then sees this watermark as already sent.
+  useEffect(() => {
+    if (!serverThread?.id || serverThread.lastVisitedAt === undefined) return;
+    if (recordedOpenRef.current === threadKey) return;
+    recordedOpenRef.current = threadKey;
+    const searchQuery = takeThreadSearchPick(threadKey);
+    lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
+    lastVisitDispatchAtRef.current = Date.now();
+    void visitThreadMutation({
+      environmentId: serverThread.environmentId,
+      input: {
+        threadId: serverThread.id,
+        visitedAt: serverThread.updatedAt,
+        opened: true,
+        ...(searchQuery ? { searchQuery } : {}),
+      },
+    });
+  }, [
+    threadKey,
+    serverThread?.environmentId,
+    serverThread?.id,
+    serverThread?.lastVisitedAt,
+    serverThread?.updatedAt,
+    visitThreadMutation,
+  ]);
 
   useEffect(() => {
     if (!serverThread?.id) return;

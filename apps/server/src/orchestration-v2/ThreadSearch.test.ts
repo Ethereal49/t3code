@@ -59,7 +59,12 @@ const createProject = (projectId: ProjectId) =>
 const thread = (
   threadId: ThreadId,
   projectId: ProjectId,
-  overrides: { readonly archivedAt?: DateTime.Utc; readonly deletedAt?: DateTime.Utc } = {},
+  overrides: {
+    readonly archivedAt?: DateTime.Utc;
+    readonly deletedAt?: DateTime.Utc;
+    readonly subagentOf?: ThreadId;
+    readonly title?: string;
+  } = {},
 ): OrchestrationV2DomainEvent => ({
   id: EventId.make(`created:${threadId}`),
   type: "thread.created",
@@ -71,7 +76,7 @@ const thread = (
     creationSource: "web",
     id: threadId,
     projectId,
-    title: threadId,
+    title: overrides.title ?? threadId,
     providerInstanceId,
     modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
     runtimeMode: "full-access",
@@ -79,7 +84,13 @@ const thread = (
     branch: null,
     worktreePath: null,
     activeProviderThreadId: null,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    lineage: overrides.subagentOf
+      ? {
+          parentThreadId: overrides.subagentOf,
+          relationshipToParent: "subagent",
+          rootThreadId: overrides.subagentOf,
+        }
+      : { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
     forkedFrom: null,
     createdAt: at(0),
     updatedAt: at(0),
@@ -168,17 +179,134 @@ it.layer(layerTest)("ThreadSearch", (it) => {
 
       const result = yield* search.search({ query: "NEEDLE", limit: 20 });
       assert.deepEqual(
-        result.matches.map((match) => [match.threadId, match.source, match.snippet]),
+        result.matches
+          .map((match) => [match.threadId, match.source, match.snippet])
+          .toSorted(([left], [right]) => String(left).localeCompare(String(right))),
         [
-          [both, "user", "newer needle question"],
           [assistantOnly, "assistant", "needle in an answer"],
+          [both, "user", "newer needle question"],
         ],
       );
       assert.lengthOf((yield* search.search({ query: "needle", limit: 1 })).matches, 1);
       assert.deepEqual((yield* search.search({ query: "ne%le" })).matches, []);
     }),
   );
+
+  it.effect("indexes a message when it finishes streaming and follows later edits", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:search-sync");
+      const threadId = ThreadId.make("thread:sync");
+      yield* createProject(project);
+      yield* projections.apply(thread(threadId, project));
+      const threadIds = (query: string) =>
+        search.search({ query }).pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+
+      yield* projections.apply(
+        message(threadId, "sync", "assistant", "streaming draft", { streaming: true }),
+      );
+      assert.deepEqual(yield* threadIds("draft"), []);
+
+      yield* projections.apply(message(threadId, "sync", "assistant", "finished answer"));
+      assert.deepEqual(yield* threadIds("finished"), [threadId]);
+
+      yield* projections.apply(message(threadId, "sync", "assistant", "edited reply"));
+      assert.deepEqual(yield* threadIds("finished"), []);
+      assert.deepEqual(yield* threadIds("edited"), [threadId]);
+    }),
+  );
+
+  it.effect("matches inside identifiers and skips subagent threads and short tokens", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:search-tokens");
+      const parent = ThreadId.make("thread:tokens-parent");
+      const subagent = ThreadId.make("thread:tokens-subagent");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(parent, project),
+          message(parent, "parent", "user", "Rename ThreadSearchService before shipping"),
+          thread(subagent, project, { subagentOf: parent }),
+          message(subagent, "subagent", "assistant", "ThreadSearchService renamed"),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+
+      const result = yield* search.search({ query: "search servi" });
+      assert.deepEqual(
+        result.matches.map((match) => [match.threadId, match.snippet]),
+        [[parent, "Rename ThreadSearchService before shipping"]],
+      );
+      // "ab" alone cannot use the index; with a longer token it is ignored.
+      assert.deepEqual((yield* search.search({ query: "ab" })).matches, []);
+      assert.lengthOf((yield* search.search({ query: "renam ab" })).matches, 1);
+    }),
+  );
 });
+
+it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
+  it.effect("ranks title matches like the palette, then message matches, within one project", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:titles");
+      const otherProject = ProjectId.make("project:titles-other");
+      yield* createProject(project);
+      yield* createProject(otherProject);
+      const wordStart = ThreadId.make("thread:word-start");
+      const midWord = ThreadId.make("thread:mid-word");
+      const messageOnly = ThreadId.make("thread:message-only");
+      const elsewhere = ThreadId.make("thread:elsewhere");
+      yield* Effect.forEach(
+        [
+          thread(midWord, project, { title: "Fix oauth redirect" }),
+          thread(wordStart, project, { title: "Clean up auth tokens" }),
+          thread(messageOnly, project, { title: "Unrelated" }),
+          message(messageOnly, "message-only", "user", "the auth flow broke again"),
+          thread(elsewhere, otherProject, { title: "Auth everywhere" }),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+
+      const result = yield* search.searchThreads({ query: "auth", projectId: project });
+      assert.deepEqual(
+        result.matches.map((match) => [match.threadId, match.source]),
+        [
+          [wordStart, "title"],
+          [midWord, "title"],
+          [messageOnly, "user"],
+        ],
+      );
+      // Exact matching finds nothing, so one typo is forgiven.
+      assert.deepEqual(
+        (yield* search.searchThreads({ query: "tokesn", projectId: project })).matches.map(
+          (match) => match.title,
+        ),
+        ["Clean up auth tokens"],
+      );
+    }),
+  );
+});
+
+it.effect("starts snippets a few words before the first match so one line shows it", () =>
+  Effect.sync(() => {
+    const text = `${"lead ".repeat(60)}the NEEDLE sits here ${"tail ".repeat(60)}`;
+    const snippet = ThreadSearch.buildSearchSnippet(text, "needle");
+    assert.isAtMost(snippet.length, 240);
+    assert.match(snippet, /^…(lead ){2,4}the NEEDLE sits here/);
+    assert.isTrue(snippet.endsWith("…"));
+    // Short text still moves a late match into view.
+    assert.equal(
+      ThreadSearch.buildSearchSnippet(`${"word ".repeat(20)}needle`, "needle"),
+      "…word word word word needle",
+    );
+  }),
+);
 
 it.effect("searches on the reader worker while the writer is busy", () =>
   Effect.gen(function* () {

@@ -22,7 +22,7 @@ import {
   CommandShortcut,
 } from "./ui/command";
 import { getVirtualizedScrollFadeClassName } from "./ui/scroll-area";
-import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
+import { HighlightedSearchText, ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
 
 interface CommandPaletteResultsProps {
   emptyStateMessage?: string;
@@ -155,10 +155,19 @@ export function CommandPaletteTitleIcon(props: { children: ReactNode }) {
   return <span className="flex h-5 shrink-0 items-center self-start pt-0.5">{props.children}</span>;
 }
 
-function CommandPaletteTitle({ title }: { title: ReactNode }) {
+function CommandPaletteTitle({
+  item,
+}: {
+  item: Pick<CommandPaletteActionItem | CommandPaletteSubmenuItem, "title" | "titleRanges">;
+}) {
+  const { title } = item;
   return (
     <span className="truncate" dir={typeof title === "string" ? textDirection(title) : undefined}>
-      {title}
+      {typeof title === "string" && item.titleRanges ? (
+        <HighlightedSearchText text={title} ranges={item.titleRanges} />
+      ) : (
+        title
+      )}
     </span>
   );
 }
@@ -173,7 +182,7 @@ function DisabledCommandPaletteResultRow(props: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {props.item.titleLeadingContent}
-            <CommandPaletteTitle title={props.item.title} />
+            <CommandPaletteTitle item={props.item} />
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
@@ -187,7 +196,7 @@ function DisabledCommandPaletteResultRow(props: {
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-foreground">
           {props.item.titleLeadingContent}
-          <CommandPaletteTitle title={props.item.title} />
+          <CommandPaletteTitle item={props.item} />
         </span>
       )}
       {props.item.titleTrailingContent}
@@ -223,7 +232,7 @@ function CommandPaletteResultRow(props: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {props.item.titleLeadingContent}
-            <CommandPaletteTitle title={props.item.title} />
+            <CommandPaletteTitle item={props.item} />
           </span>
           {props.item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={props.item.threadContentMatch} />
@@ -237,7 +246,7 @@ function CommandPaletteResultRow(props: {
       ) : (
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-sm text-foreground">
           {props.item.titleLeadingContent}
-          <CommandPaletteTitle title={props.item.title} />
+          <CommandPaletteTitle item={props.item} />
         </span>
       )}
       {props.item.titleTrailingContent}

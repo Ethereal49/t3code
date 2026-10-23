@@ -1,9 +1,14 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  rankThreadMessageMatches,
+  rememberThreadSearchPick,
+  type EnvironmentThreadSearchMatch,
+} from "@t3tools/client-runtime/state/thread-search";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquareIcon } from "lucide-react";
+import { useState } from "react";
 
 import { useClientSettings } from "../hooks/useSettings";
 import {
@@ -51,40 +56,37 @@ function useProviderEntryByEnvironmentAndInstanceId() {
   );
 }
 
-function useThreadSearchWithContentMatches(query: string) {
+function useConnectedThreadSearch(query: string) {
   const { environments } = useEnvironments();
   const environmentIds: ReadonlyArray<EnvironmentId> = environments
     .filter((environment) => environment.connection.phase === "connected")
     .map((environment) => environment.environmentId);
-  const threadSearch = useThreadSearch(environmentIds, query);
-  const contentMatchByKey = new Map(
-    threadSearch.matches.flatMap((match) =>
-      match.source === "user" || match.source === "assistant"
-        ? [[threadSearchMatchKey(match), match] as const]
-        : [],
-    ),
-  );
-  return { threadSearch, contentMatchByKey };
+  return useThreadSearch(environmentIds, query);
 }
 
-/** Every thread as a palette item, with message matches for a non-empty `threadSearchQuery`. */
+/**
+ * Every visible thread as a palette item, plus, for a non-empty
+ * `threadSearchQuery`, the threads whose messages match, best first.
+ */
 export function useCommandPaletteThreadItems(input: {
-  readonly activeThreadId: ThreadId | undefined;
+  readonly activeThread: { readonly environmentId: EnvironmentId; readonly id: ThreadId } | null;
   readonly threadSearchQuery: string;
 }) {
-  const { activeThreadId, threadSearchQuery } = input;
+  const { activeThread, threadSearchQuery } = input;
   const navigate = useNavigate();
   const threads = useThreadShells();
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
-  const { threadSearch, contentMatchByKey } = useThreadSearchWithContentMatches(threadSearchQuery);
-  const { projectByKey, projectTitleById } = useProjectLookups();
+  const messageSearch = useConnectedThreadSearch(threadSearchQuery);
+  const { projectByKey } = useProjectLookups();
+  // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
+  const [now] = useState(() => Date.now());
 
   const threadItems = buildThreadActionItems({
     threads,
-    ...(activeThreadId ? { activeThreadId } : {}),
-    projectTitleById,
+    ...(activeThread ? { activeThread } : {}),
+    projectByKey,
     sortOrder: sidebarThreadSortOrder,
     icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
     renderLeadingContent: (thread) => <ThreadRowLeadingStatus thread={thread} />,
@@ -113,7 +115,9 @@ export function useCommandPaletteThreadItems(input: {
           }
           branch={thread.branch}
           worktreePath={thread.worktreePath}
-          isCurrent={thread.id === activeThreadId}
+          isCurrent={
+            thread.id === activeThread?.id && thread.environmentId === activeThread.environmentId
+          }
           driverKind={providerEntry?.driverKind ?? null}
           providerDisplayName={
             thread.runtime?.providerName ?? providerEntry?.displayName ?? modelInstanceId
@@ -123,22 +127,13 @@ export function useCommandPaletteThreadItems(input: {
         />
       );
     },
-    getContentMatch: (thread) => {
-      const match = contentMatchByKey.get(
-        threadSearchMatchKey({
-          environmentId: thread.environmentId,
-          threadId: thread.id,
-        }),
-      );
-      return match && (match.source === "user" || match.source === "assistant")
-        ? {
-            source: match.source,
-            snippet: match.snippet,
-            query: threadSearch.query,
-          }
-        : undefined;
-    },
     runThread: async (thread) => {
+      if (threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">")) {
+        rememberThreadSearchPick(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          threadSearchQuery,
+        );
+      }
       await navigate({
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(scopeThreadRef(thread.environmentId, thread.id)),
@@ -146,5 +141,28 @@ export function useCommandPaletteThreadItems(input: {
     },
   });
 
-  return { threadItems, isSearchPending: threadSearch.isPending };
+  const itemByValue = new Map(threadItems.map((item) => [item.value, item]));
+  const itemForMatch = (match: EnvironmentThreadSearchMatch) =>
+    itemByValue.get(`thread:${match.environmentId}:${match.threadId}`);
+  const threadMessageItems = rankThreadMessageMatches(
+    messageSearch.matches,
+    (match) => itemForMatch(match)?.threadSearch,
+    now,
+  ).flatMap((match) => {
+    const item = itemForMatch(match);
+    return item
+      ? [
+          {
+            ...item,
+            threadContentMatch: {
+              source: match.source,
+              snippet: match.snippet,
+              query: messageSearch.query,
+            },
+          },
+        ]
+      : [];
+  });
+
+  return { threadItems, threadMessageItems, now, isSearchPending: messageSearch.isPending };
 }

@@ -1,8 +1,12 @@
 import { uuidv4 } from "../../lib/uuid";
 import { useNavigation } from "@react-navigation/native";
-import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import {
+  rankThreadMessageMatches,
+  rememberThreadSearchPick,
+  threadSearchSubject,
+  type EnvironmentThreadSearchMatch,
+} from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
-import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -39,6 +43,7 @@ import {
   filterCommandPaletteItems,
   nextPaletteIndex,
   type CommandPaletteItem,
+  type CommandPaletteResult,
 } from "./commandPaletteItems";
 import { parseActiveThreadPath, type HardwareKeyboardCommand } from "./hardwareKeyboardCommands";
 import { threadJumpIndex } from "./threadKeyboardShortcuts";
@@ -165,12 +170,14 @@ export function CommandPalette(props: {
   const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [query, setQuery] = useState("");
+  // Ranking is relative to when the palette opened, so rows do not reorder as time passes.
+  const [now] = useState(() => Date.now());
   const [selection, setSelection] = useState<string | null>(null);
   const [visible, setVisible] = useState(true);
   const pendingAction = useRef<(() => void) | null>(null);
   const closing = useRef(false);
   const inputRef = useRef<TextInputInstance>(null);
-  const listRef = useRef<FlatList<CommandPaletteItem>>(null);
+  const listRef = useRef<FlatList<CommandPaletteResult>>(null);
   const { width, height } = useWindowDimensions();
   // The palette floats above every column, so it keeps itself inside the window's side insets
   // and to one side of a book fold.
@@ -183,11 +190,6 @@ export function CommandPalette(props: {
     [environments],
   );
   const search = useThreadSearch(searchEnvironmentIds, query.startsWith(">") ? "" : query);
-  const matchedThreadKeys = useMemo(
-    () =>
-      new Set(search.matches.map((match) => scopedThreadKey(match.environmentId, match.threadId))),
-    [search.matches],
-  );
   const contentMatchByKey = useMemo(
     () =>
       new Map(
@@ -356,12 +358,8 @@ export function CommandPalette(props: {
           kind: "thread",
           title: thread.title || "Untitled thread",
           detail: [project?.title, environment].filter(Boolean).join(" · "),
-          searchTerms: [
-            project?.title ?? "",
-            environment,
-            thread.branch ?? "",
-            ...threadPullRequestSearchTerms(thread),
-          ],
+          searchTerms: [],
+          threadSearch: threadSearchSubject(thread, project?.title),
           run: () => selectThread(thread),
         };
       });
@@ -377,10 +375,24 @@ export function CommandPalette(props: {
     selectThreadRoute,
     threads,
   ]);
-  const results = useMemo(
-    () => filterCommandPaletteItems(items, query, matchedThreadKeys),
-    [items, matchedThreadKeys, query],
-  );
+  const results = useMemo(() => {
+    const subjectByKey = new Map(
+      items.flatMap((item) => (item.threadSearch ? [[item.key, item.threadSearch] as const] : [])),
+    );
+    const messageMatchKeys = rankThreadMessageMatches(
+      search.matches.map((match) => scopedThreadKey(match.environmentId, match.threadId)),
+      (key) => subjectByKey.get(key),
+      now,
+    );
+    return filterCommandPaletteItems(items, query, messageMatchKeys, now);
+  }, [items, now, query, search.matches]);
+  // Remember which thread this query picked, so the thread view can record it with the open.
+  const runResult = (item: CommandPaletteResult) => {
+    if (item.kind === "thread" && query.trim() && !query.startsWith(">")) {
+      rememberThreadSearchPick(item.key, query);
+    }
+    item.run();
+  };
   const selectedIndex = Math.max(
     0,
     results.findIndex((item) => item.key === selection),
@@ -430,7 +442,7 @@ export function CommandPalette(props: {
       );
     } else {
       const item = results[threadJumpIndex(command)];
-      if (item) close(item.run);
+      if (item) close(() => runResult(item));
     }
   }
 
@@ -493,7 +505,7 @@ export function CommandPalette(props: {
                     submitBehavior="submit"
                     onSubmitEditing={() => {
                       const item = results[selectedIndex];
-                      if (item) close(item.run);
+                      if (item) close(() => runResult(item));
                     }}
                   />
                 </View>
@@ -520,11 +532,9 @@ export function CommandPalette(props: {
                     item={item}
                     index={index}
                     selected={item.key === selectedKey}
-                    searchMatch={
-                      item.kind === "thread" ? contentMatchByKey.get(item.key) : undefined
-                    }
+                    searchMatch={item.fromMessages ? contentMatchByKey.get(item.key) : undefined}
                     searchQuery={query}
-                    onSelect={() => close(item.run)}
+                    onSelect={() => close(() => runResult(item))}
                   />
                 )}
               />

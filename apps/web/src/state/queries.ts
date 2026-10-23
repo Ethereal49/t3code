@@ -6,7 +6,9 @@ import {
 import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
+  visibleThreadSearch,
   type EnvironmentThreadSearchMatch,
+  type SettledThreadSearch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
@@ -36,7 +38,7 @@ const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
 const COMPOSER_PATH_SEARCH_LIMIT = 80;
 const PROJECT_CONTENT_SEARCH_DEBOUNCE_MS = 120;
 const PROJECT_CONTENT_SEARCH_LIMIT = 500;
-const THREAD_SEARCH_DEBOUNCE_MS = 200;
+const THREAD_SEARCH_DEBOUNCE_MS = 120;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
 const EMPTY_PROJECT_ENTRIES: ReadonlyArray<ProjectEntry> = [];
@@ -89,11 +91,21 @@ export function useThreadSearch(
   const result = useAtomValue(
     searchKey === null ? EMPTY_THREAD_SEARCH_ATOM : threadSearchResultsAtom(searchKey),
   );
-  const isDebouncing = canSearch && normalizedQuery !== debouncedQuery;
+  const isPending = canSearch && (normalizedQuery !== debouncedQuery || result.isLoading);
+  const ready =
+    settledQuery !== null && !result.isLoading
+      ? { query: settledQuery, matches: result.matches }
+      : null;
+  // Kept from earlier renders: React's pattern for information from previous renders.
+  const [previous, setPrevious] = useState<SettledThreadSearch | null>(null);
+  if (ready !== null && previous?.matches !== ready.matches) setPrevious(ready);
+  const visible = canSearch
+    ? visibleThreadSearch(normalizedQuery, ready, previous)
+    : { query: "", matches: EMPTY_THREAD_SEARCH_MATCHES };
   return {
-    matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
-    query: settledQuery ?? "",
-    isPending: canSearch && (isDebouncing || result.isLoading),
+    matches: visible.matches,
+    query: visible.query,
+    isPending,
   };
 }
 
