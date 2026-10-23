@@ -1,0 +1,103 @@
+import {
+  GUEST_ROUTE_PREFIX,
+  GUEST_SESSION_COOKIE,
+  GUEST_SHARE_TTL_MS,
+  GuestRedeemRequest,
+  GuestSubmitRequest,
+} from "@t3tools/contracts";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+
+import { GuestShareService, type GuestShareAccessError } from "./GuestShareService.ts";
+
+// Cloudflare closes idle streams after about 100 seconds.
+const HEARTBEAT_INTERVAL = Duration.seconds(20);
+const NO_STORE = { "cache-control": "no-store" };
+
+const decodeRedeem = Schema.decodeUnknownEffect(GuestRedeemRequest);
+const decodeSubmit = Schema.decodeUnknownEffect(GuestSubmitRequest);
+
+const errorResponse = (error: GuestShareAccessError) =>
+  HttpServerResponse.json(
+    { reason: error.reason, message: error.message },
+    { status: error.reason === "rejected" ? 409 : 403, headers: NO_STORE },
+  );
+
+const badRequest = HttpServerResponse.json(
+  { reason: "invalid", message: "The request was not valid." },
+  { status: 400, headers: NO_STORE },
+);
+
+const sessionToken = Effect.map(
+  HttpServerRequest.HttpServerRequest,
+  (request) => request.cookies[GUEST_SESSION_COOKIE] ?? "",
+);
+
+const redeemRoute = HttpRouter.add(
+  "POST",
+  `${GUEST_ROUTE_PREFIX}/redeem`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const body = yield* request.json.pipe(Effect.flatMap(decodeRedeem), Effect.option);
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.redeem(body.value).pipe(
+      Effect.flatMap((token) =>
+        HttpServerResponse.empty({ status: 204, headers: NO_STORE }).pipe(
+          HttpServerResponse.setCookie(GUEST_SESSION_COOKIE, token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "strict",
+            path: GUEST_ROUTE_PREFIX,
+            maxAge: Duration.millis(GUEST_SHARE_TTL_MS),
+          }),
+        ),
+      ),
+      Effect.catchTag("GuestShareAccessError", errorResponse),
+    );
+  }),
+);
+
+const submitRoute = HttpRouter.add(
+  "POST",
+  `${GUEST_ROUTE_PREFIX}/messages`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const body = yield* request.json.pipe(Effect.flatMap(decodeSubmit), Effect.option);
+    if (body._tag === "None") return yield* badRequest;
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.submit(yield* sessionToken, body.value).pipe(
+      Effect.flatMap(() => Effect.succeed(HttpServerResponse.empty({ status: 204 }))),
+      Effect.catchTag("GuestShareAccessError", errorResponse),
+    );
+  }),
+);
+
+const streamRoute = HttpRouter.add(
+  "GET",
+  `${GUEST_ROUTE_PREFIX}/stream`,
+  Effect.gen(function* () {
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares.stream(yield* sessionToken).pipe(
+      Effect.map((events) => {
+        const data = events.pipe(Stream.map((event) => `data: ${JSON.stringify(event)}\n\n`));
+        const heartbeat = Stream.tick(HEARTBEAT_INTERVAL).pipe(Stream.map(() => ": ping\n\n"));
+        return HttpServerResponse.stream(
+          data.pipe(Stream.merge(heartbeat, { haltStrategy: "left" }), Stream.encodeText),
+          {
+            contentType: "text/event-stream",
+            // no-transform keeps the compression middleware from buffering the stream.
+            headers: { "cache-control": "no-store, no-transform", "x-accel-buffering": "no" },
+          },
+        );
+      }),
+      Effect.catchTag("GuestShareAccessError", errorResponse),
+    );
+  }),
+);
+
+export const layer = Layer.mergeAll(redeemRoute, submitRoute, streamRoute);
