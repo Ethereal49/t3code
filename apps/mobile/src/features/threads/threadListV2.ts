@@ -172,6 +172,7 @@ export function resolveThreadListV2Status(
     | "hasPendingApprovals"
     | "hasPendingUserInput"
     | "pendingSubagentRequest"
+    | "pendingGuestMessageCount"
     | "runtime"
     | "blockedOnThreadWait"
   >,
@@ -179,7 +180,11 @@ export function resolveThreadListV2Status(
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return "approval";
   }
-  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
+  if (
+    thread.hasPendingUserInput ||
+    thread.pendingSubagentRequest === "user_input" ||
+    (thread.pendingGuestMessageCount ?? 0) > 0
+  ) {
     return "input";
   }
   if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
