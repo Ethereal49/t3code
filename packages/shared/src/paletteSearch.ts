@@ -3,8 +3,7 @@
  * the MCP thread search, so every surface puts the same thread first.
  *
  * A match scores by quality: a whole word beats a word prefix, which beats a
- * one-typo prefix, which beats a mid-word substring, which beats letters
- * spread out like initials. Word starts include camelCase, kebab, path, and
+ * one-typo prefix, which beats a mid-word substring, which beats initials. Word starts include camelCase, kebab, path, and
  * letter/digit boundaries. Thread scores then multiply quality by how recently
  * and often the thread was used, within limits.
  */
@@ -158,7 +157,7 @@ function isSwap(left: string, right: string): boolean {
 const WHOLE_WORD = 1;
 const MID_WORD = 0.3;
 const TYPO = 0.45;
-const SUBSEQUENCE = 0.2;
+const INITIALS = 0.2;
 
 interface TokenMatch extends SearchRange {
   readonly score: number;
@@ -171,14 +170,14 @@ interface TokenMatch extends SearchRange {
  * characters only match at a word start ("del" should not find "model"). With
  * `typos`, a three-character token may swap a pair and a longer one may carry
  * one typo in a word prefix that keeps its first letter. Numbers never match
- * with a typo: 22889 is not pull request 22189. With `subsequence`, the letters
- * may also be spread out (see `matchSubsequence`).
+ * with a typo: 22889 is not pull request 22189. With `initials`, the token may
+ * also be initials or word-start runs (see `matchInitials`).
  */
 function matchToken(
   field: SearchField,
   token: string,
   typos: boolean,
-  subsequence: boolean,
+  initials: boolean,
 ): TokenMatch | null {
   let best: TokenMatch | null = null;
   for (
@@ -219,34 +218,33 @@ function matchToken(
       }
     }
   }
-  return best ?? (subsequence ? matchSubsequence(field, token) : null);
+  return best ?? (initials ? matchInitials(field, token) : null);
 }
 
-// Letters may skip at most this many characters each on average; looser
-// matches find any long title ("posthog" in "Projectless threads without Git").
-const SUBSEQUENCE_GAP_PER_LETTER = 2;
-
 /**
- * The letters of `token` in order and close together, starting at a word
- * start: "fxsb" for "Fix sidebar", as in VS Code or Raycast. Weakest match,
- * tried last.
+ * Initials and word-start runs: each next letter of `token` either directly
+ * follows the last one or starts a later word, so "fsl" and "fixsid" find
+ * "Fix sidebar lag", as in VS Code. Scattered letters would find any long
+ * title ("cron" in "creation"). Weakest match, tried last.
  */
-function matchSubsequence(field: SearchField, token: string): TokenMatch | null {
+function matchInitials(field: SearchField, token: string): TokenMatch | null {
   if (token.length < 3 || DIGIT.test(token)) return null;
-  let start = -1;
-  for (let index = 0; index < field.text.length && start === -1; index++) {
-    if (field.wordStarts[index] && field.text[index] === token[0]) start = index;
-  }
+  const nextWordStart = (from: number, letter: string) => {
+    for (let index = from; index < field.text.length; index++) {
+      if (field.wordStarts[index] && field.text[index] === letter) return index;
+    }
+    return -1;
+  };
+  const start = nextWordStart(0, token[0]!);
   if (start === -1) return null;
   const letters: SearchRange[] = [{ start, end: start + 1 }];
   for (const letter of token.slice(1)) {
-    const at = field.text.indexOf(letter, letters.at(-1)!.end);
+    const after = letters.at(-1)!.end;
+    const at = field.text[after] === letter ? after : nextWordStart(after, letter);
     if (at === -1) return null;
     letters.push({ start: at, end: at + 1 });
   }
-  const end = letters.at(-1)!.end;
-  if (end - start - token.length > SUBSEQUENCE_GAP_PER_LETTER * token.length) return null;
-  return { score: SUBSEQUENCE, start, end, letters };
+  return { score: INITIALS, start, end: letters.at(-1)!.end, letters };
 }
 
 interface WeightedSearchField {
@@ -307,7 +305,7 @@ function matchSearchFields(
     for (const { field, weight } of prepared) {
       if (best >= weight && field !== primary && atWordStart) continue;
       const typos = options?.typos ?? false;
-      // Spread-out letters only count in the name, where they read as initials.
+      // Initials only count in the name.
       const match = matchToken(field, token, typos, typos && field === primary);
       if (match === null) continue;
       if (field === primary) bestPrimary = match;

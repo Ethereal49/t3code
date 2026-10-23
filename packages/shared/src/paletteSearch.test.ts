@@ -157,17 +157,14 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     ).toEqual(["Share auth across worktrees", "Fix oauth redirect"]);
   });
 
-  it("matches spread-out letters as a last resort, highlighting each", () => {
-    expect(rankTitles("fxsb", [thread("Fix sidebar lag"), thread("Unrelated work")])).toEqual([
-      "Fix sidebar lag",
-    ]);
-    expect(
-      scoreThreadSearch("fxsb", thread("Fix sidebar lag"), NOW, { typos: true })?.titleRanges,
-    ).toEqual([
+  it("matches initials and word-start runs as a last resort, highlighting each letter", () => {
+    const threads = [thread("Fix sidebar lag"), thread("Unrelated work")];
+    expect(rankTitles("fsl", threads)).toEqual(["Fix sidebar lag"]);
+    expect(rankTitles("fixsid", threads)).toEqual(["Fix sidebar lag"]);
+    expect(scoreThreadSearch("fsl", threads[0]!, NOW, { typos: true })?.titleRanges).toEqual([
       { start: 0, end: 1 },
-      { start: 2, end: 3 },
       { start: 4, end: 5 },
-      { start: 8, end: 9 },
+      { start: 12, end: 13 },
     ]);
   });
 
@@ -175,9 +172,11 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     const threads = [
       thread("Projectless threads without Git"),
       thread("Concern about connection setup"),
+      thread("Simplify worktree thread creation"),
+      thread("Start a new conversation"),
       thread("Setting up the sentinel"),
     ];
-    for (const query of ["posthog", "cron", "stripe", "gpu"]) {
+    for (const query of ["posthog", "cron", "stripe", "gpu", "fxsb"]) {
       expect(rankTitles(query, threads), query).toEqual([]);
     }
   });
