@@ -79,8 +79,9 @@ describe("decodeSourceMap", () => {
     expect(decodeSourceMap({ version: 3, sources: ["a.js"], mappings: "AAA" })).toBeUndefined();
   });
 
-  it("rejects maps with more segments than a Worker can hold, before decoding them", () => {
-    const separators = { version: 3, sources: ["a.js"], mappings: ";".repeat(3_000_000) };
+  it("rejects maps that would decode past their memory budget, before decoding them", () => {
+    // 1.7 million lines cost 34 MB of arrays without a single segment.
+    const separators = { version: 3, sources: ["a.js"], mappings: ";".repeat(1_700_000) };
     expect(decodeSourceMap(separators)).toBeUndefined();
   });
 });

@@ -15,11 +15,11 @@ for (let index = 0; index < BASE64.length; index += 1) {
 const COMMA = 44;
 const SEMICOLON = 59;
 /**
- * The arrays below cost 16 bytes per possible segment, sized before any is
- * read. A real map under the 16 MiB size cap has about 2.2 million segments;
- * this keeps a malformed one well inside a Worker isolate's 128 MB.
+ * The arrays below cost 16 bytes per possible segment and 4 per line, sized
+ * before any is read. The relay caches two decoded maps in a 128 MB isolate,
+ * so each may take 32 MB, about 1.7 times a production map today.
  */
-const MAX_SEGMENTS = 3_000_000;
+const MAX_DECODED_BYTES = 32 * 1024 * 1024;
 
 export interface CompactSourceMap {
   readonly sources: ReadonlyArray<string>;
@@ -67,7 +67,7 @@ export function decodeSourceMap(raw: unknown): CompactSourceMap | undefined {
     }
   }
 
-  if (capacity > MAX_SEGMENTS) return undefined;
+  if (capacity * 16 + (lineCount + 1) * 4 > MAX_DECODED_BYTES) return undefined;
 
   const lineStarts = new Int32Array(lineCount + 1);
   const generatedColumns = new Int32Array(capacity);

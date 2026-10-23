@@ -33,8 +33,9 @@ export const MOBILE_TELEMETRY_RATE_LIMIT = { limit: 120, periodSeconds: 60 } as 
 const UPSTREAM_TIMEOUT = Duration.seconds(10);
 const MAX_UPSTREAM_RESPONSE_BYTES = 64 * 1024;
 /**
- * Decoded Hermes maps are about 40 MB each, so a Worker isolate keeps two:
- * enough for the current iOS and Android bundles.
+ * A decoded production Hermes map is about 20 MB and `decodeSourceMap` refuses
+ * one over 32 MB, so a Worker isolate keeps two: enough for the current iOS
+ * and Android bundles.
  */
 const SOURCE_MAP_CACHE_CAPACITY = 2;
 /**
