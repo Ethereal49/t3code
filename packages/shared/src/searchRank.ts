@@ -14,7 +14,7 @@ const UPPERCASE = /\p{Lu}/u;
 const DIGIT = /\p{N}/u;
 const COMBINING_MARKS = /\p{M}/gu;
 
-export interface SearchField {
+interface SearchField {
   /** Case- and accent-folded text. */
   readonly text: string;
   readonly wordStarts: ReadonlyArray<boolean>;
@@ -163,12 +163,12 @@ function matchToken(field: SearchField, token: string, typos: boolean): TokenMat
   return null;
 }
 
-export interface WeightedSearchField {
+interface WeightedSearchField {
   readonly value: string;
   readonly weight: number;
 }
 
-export interface SearchFieldsMatch {
+interface SearchFieldsMatch {
   /** Roughly 0.3 (weak) to 1.75 (exact title). */
   readonly quality: number;
   /** Source ranges matched in the first field, for highlighting. */
@@ -369,7 +369,8 @@ function matchReference(
     : null;
 }
 
-// Strong enough that a thread you picked for this query wins over a better but unused match.
+// Strong enough that a thread you just picked for this query wins over a better
+// but unused match. It fades with the thread's last open, so old picks let go.
 const PICK_BOOST = 3;
 
 export interface ThreadSearchMatch {
@@ -402,9 +403,12 @@ export function scoreThreadSearch(
     matchSearchFields(normalizedQuery.replace(/^#/, ""), fields, options) ??
     matchReference(normalizedQuery, thread);
   if (match === null) return null;
-  const picked = thread.opens?.queries.some((pick) => pick.startsWith(normalizedQuery)) ?? false;
+  const { opens } = thread;
+  const pickBoost = opens?.queries.some((pick) => pick.startsWith(normalizedQuery))
+    ? PICK_BOOST * decay(now - opens.openedAt)
+    : 0;
   return {
-    score: match.quality * (threadUsageBoost(thread, now) + (picked ? PICK_BOOST : 0)),
+    score: match.quality * (threadUsageBoost(thread, now) + pickBoost),
     quality: match.quality,
     titleRanges: match.primaryRanges,
   };

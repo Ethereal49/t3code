@@ -37,7 +37,8 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
 
 const SearchRequest = Schema.Struct({
   match: Schema.String,
-  shortTokens: Schema.String,
+  // A JSON array in SQL, so any number of short tokens binds as one parameter.
+  shortTokens: Schema.fromJsonString(Schema.Array(Schema.String)),
   limit: Schema.Int,
 });
 const SearchRow = Schema.Struct({
@@ -239,7 +240,7 @@ export const make = Effect.gen(function* () {
       const rows = yield* read(
         searchRows({
           match: messageSearch.match,
-          shortTokens: JSON.stringify(messageSearch.shortTokens),
+          shortTokens: messageSearch.shortTokens,
           limit: input.limit ?? 50,
         }),
       );

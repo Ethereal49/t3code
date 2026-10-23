@@ -76,6 +76,14 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("rel", threads)).toEqual(["Release checklist", "Relay pairing"]);
     // Once the query leaves the pick behind, the better match wins again.
     expect(rankTitles("rela", threads)).toEqual(["Relay pairing"]);
+    // An old pick fades with the thread's last open.
+    const stale = [
+      thread("Release checklist", {
+        opens: { openedAt: NOW - 90 * DAY, score: 1, queries: ["rel"] },
+      }),
+      thread("Relay pairing", { activityAt: NOW }),
+    ];
+    expect(rankTitles("rel", stale)).toEqual(["Relay pairing", "Release checklist"]);
   });
 
   it("matches pull request numbers, branches, and projects with every token somewhere", () => {
