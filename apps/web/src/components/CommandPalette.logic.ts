@@ -475,9 +475,9 @@ function rankPaletteItem(
   return match && (item.title === item.searchTerms[0] ? match : { ...match, ranges: [] });
 }
 
-// Commands count as if used today, like an active thread, so "new" still runs
-// "New thread" rather than opening an old thread named "New thread".
-const ACTION_WEIGHT = 2;
+// Commands count like a thread in daily use, so "new" still runs "New thread"
+// rather than opening a recent thread named "New thread".
+const ACTION_WEIGHT = 3;
 // Next to matching threads, other groups show only their best few rows.
 const SECONDARY_GROUP_LIMIT = 3;
 

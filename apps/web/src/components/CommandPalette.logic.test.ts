@@ -273,6 +273,7 @@ describe("buildThreadActionItems", () => {
       }).map((group) => group.label);
 
     expect(labels("upgrade")).toEqual(["Threads"]);
+    expect(labels("upl")).toEqual(["Actions"]);
     expect(labels("up")).toEqual(["Actions", "Threads"]);
     expect(labels("pnpm up")).toEqual(["Threads"]);
   });

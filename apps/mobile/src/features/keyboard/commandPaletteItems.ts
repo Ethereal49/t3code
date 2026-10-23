@@ -30,7 +30,7 @@ export interface CommandPaletteResult extends CommandPaletteItem {
 const THREAD_RESULT_LIMIT = 20;
 const MESSAGE_RESULT_LIMIT = 10;
 // Same weighting and limits as the web palette.
-const ACTION_WEIGHT = 2;
+const ACTION_WEIGHT = 3;
 const SECONDARY_GROUP_LIMIT = 3;
 
 /**
