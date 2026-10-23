@@ -220,6 +220,7 @@ function matchToken(
   typos: boolean,
   name: boolean,
 ): TokenMatch | null {
+  if (token.length === 0) return null;
   let best: TokenMatch | null = null;
   const ownBoundary = !ALPHANUMERIC.test(token[0]!) && !SYMBOL.test(token[0]!);
   for (
@@ -429,7 +430,9 @@ function matchSearchFields(
       keyword: field.keyword ?? false,
     }));
   const primary = fields[0]?.value ? prepared[0]?.field : undefined;
-  const tokens = normalizedQuery.split(" ");
+  // An empty token would match everywhere, and loop forever in `matchToken`.
+  const tokens = normalizedQuery.split(" ").filter((token) => token.length > 0);
+  if (tokens.length === 0) return null;
   const primaryRanges: SearchRange[] = [];
   let total = 0;
   let strong = true;
@@ -670,7 +673,10 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
       if (wordStart === -1) wordStart = index;
       if (endsWordAt(text, index + token.length)) wholeWord = index;
     }
-    if (first === -1 || (wordStart === -1 && (accents?.test(text) || HAS_MARK.test(text)))) {
+    if (
+      foldedToken.length > 0 &&
+      (first === -1 || (wordStart === -1 && (accents?.test(text) || HAS_MARK.test(text))))
+    ) {
       folded ??= foldMessage(text);
       for (
         let index = folded.text.indexOf(foldedToken);
@@ -703,10 +709,13 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
  */
 export function findSearchTokenRanges(text: string, query: string): SearchRange[] {
   const tokens = new Map(
-    messageSearchTokens(query).long.map(
-      (token) =>
-        [foldSearchQuery(token), Array.from(token).length < MESSAGE_WORD_START_LENGTH] as const,
-    ),
+    messageSearchTokens(query)
+      .long.map(
+        (token) =>
+          [foldSearchQuery(token), Array.from(token).length < MESSAGE_WORD_START_LENGTH] as const,
+      )
+      // Some tokens fold to nothing ("´´´"), which would match everywhere.
+      .filter(([token]) => token.length > 0),
   );
   if (tokens.size === 0) return [];
   const field = foldSearchField(text);
@@ -946,8 +955,8 @@ function matchHint(
   }
   // A query split across fields ("cleanup payloads" in a branch and a PR
   // title): the first field that holds some of its words.
-  const tokens = normalizedQuery.split(" ");
-  if (tokens.length === 1) return undefined;
+  const tokens = normalizedQuery.split(" ").filter((token) => token.length > 0);
+  if (tokens.length <= 1) return undefined;
   for (const { label, text } of candidates) {
     if (!text) continue;
     const present = tokens.filter((token) => rangesIn(text, token));
@@ -1005,7 +1014,7 @@ export function scoreThreadSearch(
   if (thread.environmentLabel) fields.push({ value: thread.environmentLabel, weight: 0.45 });
   const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
   const pickedAt = pick?.at;
-  const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#/, "");
+  const fieldQuery = withoutPullRequestWords(normalizedQuery, thread).replace(/^#\s*/, "");
   const fieldMatch = matchSearchFields(fieldQuery, fields, options);
   const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
   const pickOnly =

@@ -162,6 +162,17 @@ describe("scoreThreadSearch", () => {
   });
 });
 
+describe("queries that fold to empty words", () => {
+  it("returns for a hash and a space, or marks that fold to nothing", () => {
+    expect(rankTitles("# fix", [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
+    expect(rankTitles("#", [thread("Fix sidebar lag")])).toEqual([]);
+    expect(rankTitles("´´´", [thread("Fix sidebar lag")])).toEqual([]);
+    expect(scoreSearchTerms("# fix", ["Fix sidebar"])).toBeNull();
+    expect(findSearchTokenRanges("Fix sidebar", "´´´")).toEqual([]);
+    expect(scoreMessageMatch("Fix sidebar", "´´´")).not.toBeUndefined();
+  });
+});
+
 describe("scoreThreadSearch beyond Latin text and titles", () => {
   it("says which field matched when the title does not, and reads pull request phrasing", () => {
     const subject = thread("Trim model lists", {
