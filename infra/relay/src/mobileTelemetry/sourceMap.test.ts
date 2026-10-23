@@ -86,6 +86,13 @@ describe("decodeSourceMap", () => {
     // Two 9 million character paths take up to 36 MB once held.
     const longSources = { version: 3, sources: ["a".repeat(9e6), "b".repeat(9e6)], mappings: "" };
     expect(decodeSourceMap(longSources)).toBeUndefined();
+    // A million one-character paths cost far more than their characters.
+    const manySources = {
+      version: 3,
+      sources: Array.from({ length: 1e6 }, () => "a"),
+      mappings: "",
+    };
+    expect(decodeSourceMap(manySources)).toBeUndefined();
   });
 });
 

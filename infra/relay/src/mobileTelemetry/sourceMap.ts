@@ -71,8 +71,8 @@ export function decodeSourceMap(raw: unknown): CompactSourceMap | undefined {
   const prefixLength = typeof sourceRoot === "string" ? sourceRoot.length + 1 : 0;
   let sourceChars = 0;
   for (const source of sources) sourceChars += source.length + prefixLength;
-  // A JavaScript string takes up to two bytes a character.
-  const decodedBytes = capacity * 16 + (lineCount + 1) * 4 + sourceChars * 2;
+  // A path takes up to two bytes a character, plus its string header and array slot.
+  const decodedBytes = capacity * 16 + (lineCount + 1) * 4 + sourceChars * 2 + sources.length * 32;
   if (decodedBytes > MAX_DECODED_BYTES) return undefined;
 
   const lineStarts = new Int32Array(lineCount + 1);
