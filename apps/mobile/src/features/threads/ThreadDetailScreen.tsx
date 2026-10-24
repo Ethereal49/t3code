@@ -75,7 +75,16 @@ import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   AppState,
   Keyboard,
@@ -132,6 +141,11 @@ import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { claimThreadOpen } from "@t3tools/client-runtime/state/thread-search";
+import {
+  finishThreadMessageJump,
+  pendingThreadMessageJump,
+  subscribeThreadMessageJump,
+} from "./threadMessageJump";
 import { parentThreadIsBelow } from "../../lib/android-workspace-navigation";
 import {
   clearThreadComposerError,
@@ -846,6 +860,33 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
       (entry) => "acknowledged" in entry && entry.acknowledged === true,
     );
   const selectedThreadFeed = props.selectedThreadFeed;
+  // A palette message result opens the thread at that message: earlier
+  // history loads until the message is in the feed, which then scrolls to it.
+  const jumpMessageId = useSyncExternalStore(subscribeThreadMessageJump, () =>
+    pendingThreadMessageJump(selectedThreadKey),
+  );
+  const jumpMessageLoaded =
+    jumpMessageId !== null &&
+    selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === jumpMessageId);
+  const historyForJump = props.historyControls;
+  const loadEarlierForJump = useEffectEvent(() => historyForJump?.onLoadEarlier());
+  useEffect(() => {
+    if (jumpMessageId === null || jumpMessageLoaded || contentPresentationKind !== "ready") return;
+    if (historyForJump?.loading) return;
+    if (!historyForJump?.hasMoreHistory || historyForJump.error !== null) {
+      finishThreadMessageJump(selectedThreadKey);
+      return;
+    }
+    loadEarlierForJump();
+  }, [
+    contentPresentationKind,
+    historyForJump?.error,
+    historyForJump?.hasMoreHistory,
+    historyForJump?.loading,
+    jumpMessageId,
+    jumpMessageLoaded,
+    selectedThreadKey,
+  ]);
   const hasCompactableConversation =
     selectedThreadFeed.some(
       (entry) =>
@@ -1447,6 +1488,8 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
               listRef={listRef}
               freeze={freeze}
               anchorMessageId={anchorMessageId}
+              jumpToMessageId={jumpMessageLoaded ? jumpMessageId : null}
+              onJumpedToMessage={() => finishThreadMessageJump(selectedThreadKey)}
               submittedMessageId={submittedMessageId}
               contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
               keyboardOffset={composerKeyboardOffset}

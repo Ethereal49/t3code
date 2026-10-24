@@ -42,6 +42,7 @@ import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
+import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useWorkspaceEnvironments } from "../../state/workspace";
@@ -460,6 +461,9 @@ export function CommandPalette(props: {
             (candidate) => scopedThreadKey(candidate.environmentId, candidate.id) === item.key,
           )
         : undefined;
+    // A message result opens the thread at that message.
+    const messageId = item.fromMessages ? contentMatchByKey.get(item.key)?.messageId : undefined;
+    if (messageId) requestThreadMessageJump(item.key, messageId);
     // A pick sends its open with the query, always, so the server records it;
     // the thread screen then skips its own open. The open thread is no pick.
     if (thread && thread.lastVisitedAt !== undefined && !item.secondary) {
