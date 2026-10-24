@@ -871,7 +871,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
   // A jump this screen never reached lets go when the thread closes.
   useEffect(() => () => finishThreadMessageJump(selectedThreadKey), [selectedThreadKey]);
   const historyForJump = props.historyControls;
-  const loadEarlierForJump = useEffectEvent(() => historyForJump?.onLoadEarlier());
+  // History down to the message in one request; another page if it is not
+  // there yet.
+  const loadEarlierForJump = useEffectEvent(() => {
+    if (jumpMessageId !== null) historyForJump?.onLoadThrough(jumpMessageId);
+  });
   useEffect(() => {
     if (jumpMessageId === null || jumpMessageLoaded || contentPresentationKind !== "ready") return;
     if (historyForJump?.loading) return;

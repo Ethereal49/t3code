@@ -983,7 +983,7 @@ const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
 /**
  * Sidebar search results: title, branch, and pull request matches ranked as
  * the command palette ranks them, then threads listed only because their
- * messages match, in list order.
+ * messages match, in `contentMatchKeys` order.
  */
 export function searchSidebarThreads<
   T extends ThreadSearchShell & {
@@ -1005,13 +1005,17 @@ export function searchSidebarThreads<
     }),
   ).map(({ item }) => item);
   const listed = new Set(titleMatches);
-  const contentMatches = threads.filter(
-    (thread) =>
-      !listed.has(thread) &&
-      contentMatchKeys.has(
-        threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-      ),
+  // In the order the server ranked their messages, as the palette lists them.
+  const threadByKey = new Map(
+    threads.map((thread) => [
+      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+      thread,
+    ]),
   );
+  const contentMatches = [...contentMatchKeys].flatMap((key) => {
+    const thread = threadByKey.get(key);
+    return thread && !listed.has(thread) ? [thread] : [];
+  });
   return { titleMatches, contentMatches };
 }
 

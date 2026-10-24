@@ -48,7 +48,7 @@ function foldCharacter(character: string): string {
     .replace(COMBINING_MARKS, "")
     .toLowerCase()
     .replace("ς", "σ")
-    .replace("’", "'");
+    .replace(/[‘’]/, "'");
 }
 
 /**
