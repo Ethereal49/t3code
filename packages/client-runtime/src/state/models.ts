@@ -1,5 +1,5 @@
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
+import { threadPullRequestsOf } from "../threadPullRequests.ts";
 import type {
   ThreadLinkedPullRequest,
   EnvironmentId,
@@ -186,6 +186,8 @@ export interface EnvironmentThreadShell {
    * local visited state they keep.
    */
   readonly lastVisitedAt?: string | null;
+  /** Server-tracked open history for search ranking. */
+  readonly opens?: import("@t3tools/contracts").OrchestrationV2ThreadOpens | null;
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
   readonly deletedAt: string | null;
   readonly source: OrchestrationV2ThreadShell;
@@ -332,6 +334,7 @@ export function presentThreadShell(
     ...(thread.lastVisitedAt === undefined
       ? {}
       : { lastVisitedAt: nullableIso(thread.lastVisitedAt) }),
+    opens: thread.opens ?? null,
     titleRegeneration:
       thread.titleRegeneration == null
         ? null
