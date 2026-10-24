@@ -382,8 +382,7 @@ beforeEach(() => {
 it.live("preview_open reports its navigation timeout instead of the request budget", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const broker = yield* Broker.PreviewAutomationBroker;
-      yield* Effect.yieldNow;
+      const { broker } = yield* ready;
       initialNavigation = async () => {
         throw Object.assign(new Error("page.goto: Timeout 15000ms exceeded."), {
           name: "TimeoutError",
