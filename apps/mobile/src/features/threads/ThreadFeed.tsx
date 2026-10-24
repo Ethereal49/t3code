@@ -205,6 +205,7 @@ import {
   isSecretRequestActivityGroup,
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
+  messageFoldRunId,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
@@ -2638,10 +2639,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       (entry) => entry.type === "message" && entry.id === jumpToMessageId,
     );
     if (index === -1) {
-      const source = props.feed.find(
-        (entry) => entry.type === "message" && entry.id === jumpToMessageId,
-      );
-      const runId = source?.type === "message" ? source.message.runId : null;
+      const runId = messageFoldRunId(props.feed, jumpToMessageId);
       if (runId && !expandedTurnIds.has(runId)) {
         setInteractionState((current) => ({
           ...current,

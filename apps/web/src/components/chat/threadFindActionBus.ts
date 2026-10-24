@@ -1,3 +1,5 @@
+import type { OrchestrationThreadSearchMatch } from "@t3tools/contracts";
+import { findSearchTokenRanges, messageSearchTokens } from "@t3tools/shared/paletteSearch";
 import type { ThreadFindStart } from "./threadFind";
 
 const THREAD_FIND_OPEN_EVENT = "t3:thread-find-open";
@@ -32,6 +34,30 @@ export function takeThreadFindQuery(threadKey: string): PendingFind | null {
   const find = pendingFind;
   pendingFind = null;
   return find;
+}
+
+/**
+ * The find a message search result opens: the query's longest word, as the
+ * most telling ("sidebar" in "fix sidebar"), written as the snippet writes it
+ * ("Café" for "cafe", since find matches accents), at the matched message.
+ */
+export function findForMessageMatch(
+  match: Pick<OrchestrationThreadSearchMatch, "snippet" | "messageId">,
+  query: string,
+): PendingFind {
+  const word =
+    messageSearchTokens(query).long.reduce(
+      (longest, token) => (token.length > longest.length ? token : longest),
+      "",
+    ) || query;
+  const ranges = findSearchTokenRanges(match.snippet, word);
+  // A whole word first, as search ranked it: "Café", not "Cafe" in "Cafeteria".
+  const shown =
+    ranges.find((range) => !/[\p{L}\p{N}]/u.test(match.snippet[range.end] ?? "")) ?? ranges[0];
+  return {
+    query: shown ? match.snippet.slice(shown.start, shown.end) : word,
+    ...(match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {}),
+  };
 }
 
 export function subscribeThreadFindQuery(listener: () => void): () => void {

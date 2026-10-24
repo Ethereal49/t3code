@@ -1,15 +1,15 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { requestThreadFindQuery } from "./chat/threadFindActionBus";
+import { findForMessageMatch, requestThreadFindQuery } from "./chat/threadFindActionBus";
 import {
   claimThreadOpen,
   nextShownOrder,
+  shownMessageCount,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
-  findSearchTokenRanges,
   foldSearchQuery,
-  messageSearchTokens,
+  PALETTE_MESSAGE_LIMIT,
   pickedQuery,
   rankMessageMatches,
 } from "@t3tools/shared/paletteSearch";
@@ -201,35 +201,29 @@ export function useCommandPaletteThreadItems(input: {
         // Opens the thread with find on the word at the matched message, so it is in view.
         run: async () => {
           await item.run();
-          // The longest word, as the most telling ("sidebar" in "fix sidebar"),
-          // as the message writes it ("Café" for "cafe"): find matches accents.
-          const word =
-            messageSearchTokens(messageSearch.query).long.reduce(
-              (longest, token) => (token.length > longest.length ? token : longest),
-              "",
-            ) || messageSearch.query;
-          const shown = findSearchTokenRanges(match.snippet, word)[0];
           requestThreadFindQuery(
             scopedThreadKey(scopeThreadRef(match.environmentId, match.threadId)),
-            {
-              query: shown ? match.snippet.slice(shown.start, shown.end) : word,
-              ...(match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {}),
-            },
+            findForMessageMatch(match, messageSearch.query),
           );
         },
       },
     ];
   });
 
+  // Rows already shown keep their places when a slower environment answers.
+  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, messageSearch.complete);
   const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
   const order = nextShownOrder(
     shownOrder,
     messageSearch.query,
     rankedMessageItems.map((item) => item.value),
+    shownCount,
   );
   if (order !== shownOrder) setShownOrder(order);
   const messageItemByValue = new Map(rankedMessageItems.map((item) => [item.value, item]));
-  const threadMessageItems = order.keys.flatMap((value) => messageItemByValue.get(value) ?? []);
+  const threadMessageItems = (
+    messageSearch.complete ? order.keys : order.keys.slice(0, shownCount)
+  ).flatMap((value) => messageItemByValue.get(value) ?? []);
 
   return {
     threadItems,
