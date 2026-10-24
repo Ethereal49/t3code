@@ -46,26 +46,34 @@ describe("applyGuestStreamEvent", () => {
       view,
       items: [{ kind: "user", id: "u1", text: "hi", streaming: false }],
       ended: false,
-      seenPendingIds: new Set(),
+      awaitingRowIds: new Set(),
     });
   });
 
-  it("remembers waiting messages across a reconnect", () => {
+  it("remembers a waiting message across a reconnect until its row arrives", () => {
     const waiting = {
       id: GuestMessageId.make("m1"),
       text: "Why?",
       status: "pending" as const,
       submittedAt: "2026-10-23T10:00:00.000Z",
     };
-    const state = apply([
+    const sent = { ...waiting, status: "sent" as const };
+    const queued = apply([
       { type: "snapshot", view: { ...view, messages: [waiting] }, items: [] },
-      {
-        type: "snapshot",
-        view: { ...view, messages: [{ ...waiting, status: "sent" }] },
-        items: [],
-      },
+      { type: "snapshot", view: { ...view, messages: [sent] }, items: [] },
     ]);
-    expect([...state.seenPendingIds]).toEqual([waiting.id]);
+    expect([...queued.awaitingRowIds]).toEqual([waiting.id]);
+
+    // Once placed, a later snapshot whose window no longer holds the row must not resurrect it.
+    const row = { kind: "user" as const, id: "u1", text: "Why?", streaming: false };
+    const placed = apply(
+      [
+        { type: "item", item: { ...row, guestMessageId: waiting.id } },
+        { type: "snapshot", view: { ...view, messages: [sent] }, items: [] },
+      ],
+      queued,
+    );
+    expect(placed.awaitingRowIds.size).toBe(0);
   });
 
   it("upserts items by id and keeps their order", () => {

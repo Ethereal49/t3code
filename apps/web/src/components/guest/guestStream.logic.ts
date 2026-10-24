@@ -12,24 +12,42 @@ export interface GuestStreamState {
   readonly view: GuestShareView | null;
   readonly items: ReadonlyArray<GuestTranscriptItem>;
   readonly ended: boolean;
-  /** Messages this page has seen waiting. Survives reconnects; see `unplacedGuestMessages`. */
-  readonly seenPendingIds: ReadonlySet<GuestMessageId>;
+  /**
+   * Messages this page saw waiting that have no transcript row yet. Survives reconnects, and a
+   * message leaves once its row arrives, so a later bounded snapshot cannot bring it back.
+   */
+  readonly awaitingRowIds: ReadonlySet<GuestMessageId>;
 }
 
 export const initialGuestStreamState: GuestStreamState = {
   view: null,
   items: [],
   ended: false,
-  seenPendingIds: new Set(),
+  awaitingRowIds: new Set(),
 };
 
-function withSeenPending(
-  seen: ReadonlySet<GuestMessageId>,
+function withPendingFrom(
+  awaiting: ReadonlySet<GuestMessageId>,
   view: GuestShareView,
 ): ReadonlySet<GuestMessageId> {
   const pending = view.messages.filter((message) => message.status === "pending");
-  if (pending.every((message) => seen.has(message.id))) return seen;
-  return new Set([...seen, ...pending.map((message) => message.id)]);
+  if (pending.every((message) => awaiting.has(message.id))) return awaiting;
+  return new Set([...awaiting, ...pending.map((message) => message.id)]);
+}
+
+function withoutPlaced(
+  awaiting: ReadonlySet<GuestMessageId>,
+  items: ReadonlyArray<GuestTranscriptItem>,
+): ReadonlySet<GuestMessageId> {
+  const placed = items.flatMap((item) =>
+    item.kind === "user" && item.guestMessageId && awaiting.has(item.guestMessageId)
+      ? [item.guestMessageId]
+      : [],
+  );
+  if (placed.length === 0) return awaiting;
+  const next = new Set(awaiting);
+  for (const id of placed) next.delete(id);
+  return next;
 }
 
 const decodeGuestStreamEvent = Schema.decodeUnknownOption(Schema.fromJsonString(GuestStreamEvent));
@@ -52,7 +70,10 @@ export function applyGuestStreamEvent(
         view: event.view,
         items: event.items,
         ended: false,
-        seenPendingIds: withSeenPending(state.seenPendingIds, event.view),
+        awaitingRowIds: withoutPlaced(
+          withPendingFrom(state.awaitingRowIds, event.view),
+          event.items,
+        ),
       };
     case "item": {
       const exists = state.items.some((item) => item.id === event.item.id);
@@ -61,6 +82,7 @@ export function applyGuestStreamEvent(
         items: exists
           ? state.items.map((item) => (item.id === event.item.id ? event.item : item))
           : [...state.items, event.item],
+        awaitingRowIds: withoutPlaced(state.awaitingRowIds, [event.item]),
       };
     }
     case "append":
@@ -76,7 +98,7 @@ export function applyGuestStreamEvent(
       return {
         ...state,
         view: event.view,
-        seenPendingIds: withSeenPending(state.seenPendingIds, event.view),
+        awaitingRowIds: withPendingFrom(state.awaitingRowIds, event.view),
       };
     case "ended":
       return { ...state, ended: true };
@@ -85,14 +107,14 @@ export function applyGuestStreamEvent(
 
 /**
  * The guest's messages to show after the transcript, oldest first. Pending ones always show. A
- * sent or dismissed one shows only if this page saw it waiting and it has no transcript row yet:
- * a queued send, or a dismissal to report. The transcript is a bounded window, so a resolved
- * message the page never saw waiting is old history, not something to place at the end.
+ * sent or dismissed one shows only while it awaits a row (see `awaitingRowIds`): a queued send, or
+ * a dismissal to report. The transcript is a bounded window, so any other resolved message is old
+ * history, not something to place at the end.
  */
 export function unplacedGuestMessages(
   messages: ReadonlyArray<ThreadGuestMessage>,
   items: ReadonlyArray<GuestTranscriptItem>,
-  seenPendingIds: ReadonlySet<GuestMessageId>,
+  awaitingRowIds: ReadonlySet<GuestMessageId>,
 ): ReadonlyArray<ThreadGuestMessage> {
   const placed = new Set(
     items.flatMap((item) =>
@@ -102,7 +124,7 @@ export function unplacedGuestMessages(
   return messages
     .filter(
       (message) =>
-        !placed.has(message.id) && (message.status === "pending" || seenPendingIds.has(message.id)),
+        !placed.has(message.id) && (message.status === "pending" || awaitingRowIds.has(message.id)),
     )
     .toSorted((a, b) => a.submittedAt.localeCompare(b.submittedAt));
 }

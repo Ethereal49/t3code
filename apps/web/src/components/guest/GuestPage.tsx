@@ -131,7 +131,7 @@ function GuestSession() {
   }
   if (stream.view !== null) {
     return (
-      <GuestThread view={stream.view} items={stream.items} seenPendingIds={stream.seenPendingIds} />
+      <GuestThread view={stream.view} items={stream.items} awaitingRowIds={stream.awaitingRowIds} />
     );
   }
   if (!rejected) return <Notice title="Connecting..." />;
@@ -204,13 +204,13 @@ function NameForm({
 function GuestThread({
   view: { title, working, expiresAt, messages },
   items,
-  seenPendingIds,
+  awaitingRowIds,
 }: {
   readonly view: GuestShareView;
   readonly items: ReadonlyArray<GuestTranscriptItem>;
-  readonly seenPendingIds: GuestStreamState["seenPendingIds"];
+  readonly awaitingRowIds: GuestStreamState["awaitingRowIds"];
 }) {
-  const unplaced = unplacedGuestMessages(messages, items, seenPendingIds);
+  const unplaced = unplacedGuestMessages(messages, items, awaitingRowIds);
   const ownMessageIds = new Set(messages.map((message) => message.id));
   return (
     <>
