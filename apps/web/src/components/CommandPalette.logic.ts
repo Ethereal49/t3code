@@ -1,6 +1,5 @@
 import {
   foldSearchQuery,
-  PALETTE_MESSAGE_LIMIT,
   PALETTE_SECONDARY_LIMIT,
   PALETTE_THREAD_LIMIT,
   rankSearchGroups,
@@ -589,12 +588,11 @@ export function filterCommandPaletteGroups(input: {
 
   if (!searchesEverything) return groups;
   const listed = new Set(groups.flatMap((group) => group.items.map((item) => item.value)));
-  const messageItems = (input.threadMessageItems ?? [])
-    .filter((item) => !listed.has(item.value))
-    .slice(0, PALETTE_MESSAGE_LIMIT);
+  // The items arrive cut to what the palette shows; see `nextShownOrder`.
+  const messageItems = (input.threadMessageItems ?? []).filter((item) => !listed.has(item.value));
   // A static last row, so a list that looks finished is not taken for one
   // while a slower environment still answers.
-  if (input.messagesPending && messageItems.length < PALETTE_MESSAGE_LIMIT) {
+  if (input.messagesPending) {
     messageItems.push({
       kind: "action",
       value: "threads-messages:pending",

@@ -30,7 +30,11 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  threadSearchMatchKey,
+  threadSearchSubject,
+} from "@t3tools/client-runtime/state/thread-search";
+import { foldSearchQuery, rankMessageMatches } from "@t3tools/shared/paletteSearch";
 import { findForMessageMatch, requestThreadFindQuery } from "./chat/threadFindActionBus";
 import {
   threadRuntimeCanArchive,
@@ -1105,8 +1109,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     isSearchingThreads,
   ]);
 
+  // Ranked across environments as the palette ranks them, so one
+  // environment's list does not sit above another's better matches.
+  const subjectByMatchKey = new Map(
+    searchableThreads.map((thread) => [
+      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+      threadSearchSubject(thread, null),
+    ]),
+  );
   const serverMatchByKey = new Map(
-    threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const),
+    rankMessageMatches(
+      threadSearch.matches,
+      (match) => subjectByMatchKey.get(threadSearchMatchKey(match)),
+      foldSearchQuery(threadSearchQuery),
+      Date.now(),
+    ).map((match) => [threadSearchMatchKey(match), match] as const),
   );
   const { titleMatches: threadTitleResults, contentMatches: threadContentResults } =
     searchSidebarThreads(searchableThreads, threadSearchQuery, new Set(serverMatchByKey.keys()));

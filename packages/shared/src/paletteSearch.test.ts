@@ -635,6 +635,14 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
     expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
     expect(scoreMessageMatch("Use the sidebar", '"sidebar"')).toEqual({ quality: 1, offset: 8 });
+    // Words written together as typed rank above the same words apart, and
+    // the snippet starts where they are together.
+    const together = "Run the tests, then vp run dev to check";
+    expect(scoreMessageMatch(together, "vp run dev")).toEqual({
+      quality: 1.25,
+      offset: together.indexOf("vp run dev"),
+    });
+    expect(scoreMessageMatch("dev notes: vp is slow, run it", "vp run dev")?.quality).toBe(1);
     // The snippet shows the longest word, not an early filler word.
     const phrase = "Yes. Since the last fix, the sidebar works";
     expect(scoreMessageMatch(phrase, "fix the sidebar")?.offset).toBe(phrase.indexOf("sidebar"));
@@ -658,7 +666,7 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("Upgrade to pnpm12 today", "pnpm 12")?.quality).toBe(1);
     // A short word that only starts a longer one is a prefix match.
     expect(scoreMessageMatch("Fix circle rendering", "fix ci")?.quality).toBe(0.8);
-    expect(scoreMessageMatch("Fix CI failures", "fix ci")?.quality).toBe(1);
+    expect(scoreMessageMatch("Fix CI failures", "fix ci")?.quality).toBe(1.25);
     expect(scoreMessageMatch("Upgrade pnpm 123 today", "pnpm 12")?.quality).toBe(0.8);
     expect(scoreMessageMatch("Rename the file to index.ts", ".ts")?.quality).toBe(1);
   });

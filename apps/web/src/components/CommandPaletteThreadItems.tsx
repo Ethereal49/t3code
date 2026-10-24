@@ -3,7 +3,6 @@ import { findForMessageMatch, requestThreadFindQuery } from "./chat/threadFindAc
 import {
   claimThreadOpen,
   nextShownOrder,
-  shownMessageCount,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
@@ -214,19 +213,18 @@ export function useCommandPaletteThreadItems(input: {
   });
 
   // Rows already shown keep their places when a slower environment answers.
-  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, messageSearch.complete);
   const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
   const order = nextShownOrder(
     shownOrder,
     messageSearch.query,
     rankedMessageItems.map((item) => item.value),
-    shownCount,
+    PALETTE_MESSAGE_LIMIT,
   );
   if (order !== shownOrder) setShownOrder(order);
   const messageItemByValue = new Map(rankedMessageItems.map((item) => [item.value, item]));
-  const threadMessageItems = (
-    messageSearch.complete ? order.keys : order.keys.slice(0, shownCount)
-  ).flatMap((value) => messageItemByValue.get(value) ?? []);
+  const threadMessageItems = order.keys
+    .slice(0, order.shown)
+    .flatMap((value) => messageItemByValue.get(value) ?? []);
 
   return {
     threadItems,

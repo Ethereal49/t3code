@@ -453,6 +453,8 @@ const MESSAGE_TOKEN_MIN_LENGTH = 3;
 export function messageSearchTokens(query: string): {
   readonly long: ReadonlyArray<string>;
   readonly short: ReadonlyArray<string>;
+  /** Every token, in the order typed. */
+  readonly words: ReadonlyArray<string>;
 } {
   const tokens = query
     .replace(WRAPPING_QUOTES, "")
@@ -469,8 +471,35 @@ export function messageSearchTokens(query: string): {
   return {
     long: tokens.filter(searchable),
     short: tokens.filter((token) => !searchable(token)),
+    words: tokens,
   };
 }
+
+// The server grades thousands of hits for one query, so its phrase is built once.
+let lastPhrase: { readonly query: string; readonly phrase: RegExp | null } | null = null;
+
+/**
+ * Matches the query's words side by side as whole words, as typed, whatever
+ * whitespace is between them and ignoring case; null for a single word.
+ */
+export function messagePhrase(query: string): RegExp | null {
+  if (lastPhrase?.query === query) return lastPhrase.phrase;
+  const { words } = messageSearchTokens(query);
+  const phrase =
+    words.length > 1
+      ? new RegExp(
+          `(?<![\\p{L}\\p{N}])${words
+            .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("\\s+")}(?![\\p{L}\\p{N}])`,
+          "iu",
+        )
+      : null;
+  lastPhrase = { query, phrase };
+  return phrase;
+}
+
+// Words written together, as typed, rank above the same words apart, as in titles.
+const MESSAGE_PHRASE_BONUS = 0.25;
 
 const NON_ASCII = /[\u0080-\uffff]/;
 // A message token shorter than this must start a word: "fts" is not in "drafts".
@@ -530,7 +559,8 @@ function findMessageToken(
 export interface MessageMatch {
   /**
    * 1 when every token is a whole word, MESSAGE_PREFIX when one only starts
-   * a word ("mode" in "model"), MID_WORD when one only appears inside words.
+   * a word ("mode" in "model"), MID_WORD when one only appears inside words,
+   * plus MESSAGE_PHRASE_BONUS when the words are written together as typed.
    */
   readonly quality: number;
   /** Where a snippet should start to show the match. */
@@ -574,6 +604,12 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
       offset = found.at;
       offsetTokenLength = token.length;
     }
+  }
+  // Written together as typed: the snippet starts there.
+  const together = messagePhrase(query)?.exec(plain);
+  if (together) {
+    offset = together.index;
+    quality += MESSAGE_PHRASE_BONUS;
   }
   return { quality, offset };
 }

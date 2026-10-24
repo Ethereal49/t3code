@@ -1,7 +1,6 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   foldSearchQuery,
-  PALETTE_MESSAGE_LIMIT,
   PALETTE_SECONDARY_LIMIT,
   PALETTE_THREAD_LIMIT,
   rankSearchGroups,
@@ -96,12 +95,11 @@ export function filterCommandPaletteItems(
   const threadByKey = new Map(
     items.filter((item) => item.kind === "thread").map((item) => [item.key, item]),
   );
-  const fromMessages = messageMatchKeys
-    .flatMap((key) => {
-      const item = threadByKey.get(key);
-      return item && !listed.has(key) ? [{ ...item, fromMessages: true }] : [];
-    })
-    .slice(0, PALETTE_MESSAGE_LIMIT);
+  // `messageMatchKeys` arrive cut to what the palette shows; see `nextShownOrder`.
+  const fromMessages = messageMatchKeys.flatMap((key) => {
+    const item = threadByKey.get(key);
+    return item && !listed.has(key) ? [{ ...item, fromMessages: true }] : [];
+  });
   return [...ranked, ...fromMessages];
 }
 

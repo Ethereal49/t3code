@@ -158,31 +158,38 @@ export function threadSearchSubject(
 export interface ShownOrder {
   readonly query: string;
   readonly keys: ReadonlyArray<string>;
-  /** How many of `keys` were on screen; only those hold their places. */
+  /** How many of `keys` are on screen; only those hold their places. */
   readonly shown: number;
 }
 
+// Rows past the limit a slower environment's best matches may take.
+const LATE_ROOM = 3;
+
 /**
- * The order to show message results in: rows already shown for this query
- * keep their places and the rest go below them in rank order, so a slower
- * environment's answer never moves a row under the pointer or the keyboard
- * highlight. `shownCount` is how many rows the box shows now. Returns
- * `previous` when nothing changed, so it can sit in React state.
+ * The order to show message results in, and how many: rows already shown for
+ * this query keep their places, and results that arrive later, from a slower
+ * environment, go below them with up to LATE_ROOM rows past `limit`. Nothing
+ * moves under the pointer or the keyboard highlight, and a late best match
+ * still shows. Returns `previous` when nothing changed, so it can sit in React
+ * state.
  */
 export function nextShownOrder(
   previous: ShownOrder | null,
   query: string,
   ranked: ReadonlyArray<string>,
-  shownCount: number,
+  limit: number,
 ): ShownOrder {
   if (previous?.query !== query) {
-    return { query, keys: ranked, shown: Math.min(shownCount, ranked.length) };
+    return { query, keys: ranked, shown: Math.min(limit, ranked.length) };
   }
   const listed = new Set(ranked);
   const kept = previous.keys.slice(0, previous.shown).filter((key) => listed.has(key));
   const held = new Set(kept);
-  const keys = [...kept, ...ranked.filter((key) => !held.has(key))];
-  const shown = Math.min(Math.max(shownCount, kept.length), keys.length);
+  const seen = new Set(previous.keys);
+  const rest = ranked.filter((key) => !held.has(key));
+  const arrived = rest.filter((key) => !seen.has(key)).length;
+  const keys = [...kept, ...rest];
+  const shown = Math.min(keys.length, Math.max(limit, kept.length + Math.min(arrived, LATE_ROOM)));
   const unchanged =
     shown === previous.shown &&
     keys.length === previous.keys.length &&
@@ -190,20 +197,9 @@ export function nextShownOrder(
   return unchanged ? previous : { query, keys, shown };
 }
 
-/**
- * How many message rows a search box shows: half while slower environments
- * still answer, so their best matches find a place below the rows already
- * shown instead of past the end.
- */
-export function shownMessageCount(limit: number, complete: boolean): number {
-  return complete ? limit : Math.ceil(limit / 2);
-}
-
 export interface SettledThreadSearch {
   readonly query: string;
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
-  /** Every environment answered; otherwise slower ones may still add matches. */
-  readonly complete: boolean;
 }
 
 /**
@@ -225,5 +221,5 @@ export function visibleThreadSearch(
     before.length > 0 &&
     (current.startsWith(before) || before.startsWith(current))
     ? previous
-    : { query: "", matches: [], complete: true };
+    : { query: "", matches: [] };
 }

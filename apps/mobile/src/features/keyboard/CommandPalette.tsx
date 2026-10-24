@@ -3,7 +3,6 @@ import { useNavigation } from "@react-navigation/native";
 import {
   claimThreadOpen,
   nextShownOrder,
-  shownMessageCount,
   threadSearchSubject,
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
@@ -446,12 +445,16 @@ export function CommandPalette(props: {
   }, [items, now, query, search.matches]);
   // Rows already shown keep their places when a slower environment answers.
   const [shownOrder, setShownOrder] = useState<ShownOrder | null>(null);
-  const shownCount = shownMessageCount(PALETTE_MESSAGE_LIMIT, search.complete);
-  const messageOrder = nextShownOrder(shownOrder, search.query, rankedMessageKeys, shownCount);
+  const messageOrder = nextShownOrder(
+    shownOrder,
+    search.query,
+    rankedMessageKeys,
+    PALETTE_MESSAGE_LIMIT,
+  );
   if (messageOrder !== shownOrder) setShownOrder(messageOrder);
   const messageMatchKeys = useMemo(
-    () => (search.complete ? messageOrder.keys : messageOrder.keys.slice(0, shownCount)),
-    [messageOrder.keys, search.complete, shownCount],
+    () => messageOrder.keys.slice(0, messageOrder.shown),
+    [messageOrder.keys, messageOrder.shown],
   );
   const results = useMemo(() => {
     const ranked = filterCommandPaletteItems(items, query, messageMatchKeys, now);

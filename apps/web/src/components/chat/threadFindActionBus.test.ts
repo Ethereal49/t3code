@@ -14,5 +14,9 @@ describe("findForMessageMatch", () => {
     expect(findForMessageMatch({ snippet: "fix the sidebar lag" }, "fix sidebar")).toEqual({
       query: "sidebar",
     });
+    // The whole query, when the snippet holds it as typed.
+    expect(findForMessageMatch({ snippet: "then Vp  run dev again" }, "vp run dev")).toEqual({
+      query: "Vp  run dev",
+    });
   });
 });

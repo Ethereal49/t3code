@@ -1,5 +1,9 @@
 import type { OrchestrationThreadSearchMatch } from "@t3tools/contracts";
-import { findSearchTokenRanges, messageSearchTokens } from "@t3tools/shared/paletteSearch";
+import {
+  findSearchTokenRanges,
+  messagePhrase,
+  messageSearchTokens,
+} from "@t3tools/shared/paletteSearch";
 import type { ThreadFindStart } from "./threadFind";
 
 const THREAD_FIND_OPEN_EVENT = "t3:thread-find-open";
@@ -40,14 +44,18 @@ export function takeThreadFindQuery(threadKey: string): PendingFind | null {
 }
 
 /**
- * The find a message search result opens: the query's longest word, as the
- * most telling ("sidebar" in "fix sidebar"), written as the snippet writes it
- * ("Café" for "cafe", since find matches accents), at the matched message.
+ * The find a message search result opens, at the matched message: the whole
+ * query when the snippet holds it as typed ("vp run dev"), else its longest
+ * word, as the most telling ("sidebar" in "fix sidebar"), written as the
+ * snippet writes it ("Café" for "cafe", since find matches accents).
  */
 export function findForMessageMatch(
   match: Pick<OrchestrationThreadSearchMatch, "snippet" | "messageId">,
   query: string,
 ): PendingFind {
+  const start = match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {};
+  const together = messagePhrase(query)?.exec(match.snippet);
+  if (together) return { query: together[0], ...start };
   const word =
     messageSearchTokens(query).long.reduce(
       (longest, token) => (token.length > longest.length ? token : longest),
@@ -57,10 +65,7 @@ export function findForMessageMatch(
   // A whole word first, as search ranked it: "Café", not "Cafe" in "Cafeteria".
   const shown =
     ranges.find((range) => !/[\p{L}\p{N}]/u.test(match.snippet[range.end] ?? "")) ?? ranges[0];
-  return {
-    query: shown ? match.snippet.slice(shown.start, shown.end) : word,
-    ...(match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {}),
-  };
+  return { query: shown ? match.snippet.slice(shown.start, shown.end) : word, ...start };
 }
 
 export function subscribeThreadFindQuery(listener: () => void): () => void {

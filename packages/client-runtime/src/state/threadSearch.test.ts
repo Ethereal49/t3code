@@ -11,7 +11,6 @@ import { expect, it } from "vite-plus/test";
 import {
   claimThreadOpen,
   nextShownOrder,
-  shownMessageCount,
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   threadSearchMatchKey,
@@ -109,7 +108,6 @@ it("merges successful environments and silently ignores failures", () => {
 it("keeps the previous results visible only while a refined or widened query is pending", () => {
   const previous = {
     query: "websock",
-    complete: true,
     matches: [
       {
         environmentId: envA,
@@ -123,12 +121,8 @@ it("keeps the previous results visible only while a refined or widened query is 
   };
   expect(visibleThreadSearch("websocke", null, previous)).toBe(previous);
   expect(visibleThreadSearch("webso", null, previous)).toBe(previous);
-  expect(visibleThreadSearch("billing", null, previous)).toEqual({
-    query: "",
-    matches: [],
-    complete: true,
-  });
-  const ready = { query: "websocke", matches: [], complete: true };
+  expect(visibleThreadSearch("billing", null, previous)).toEqual({ query: "", matches: [] });
+  const ready = { query: "websocke", matches: [] };
   expect(visibleThreadSearch("websocke", ready, previous)).toBe(ready);
 });
 
@@ -178,18 +172,16 @@ it("counts recency from what the user wrote, else from when the thread began", (
 });
 
 it("keeps shown message rows in place and leaves room for a slower environment", () => {
-  // The fast environment answers first; half the rows show while one is pending.
-  const fast = Array.from({ length: 10 }, (_, index) => `a${index}`);
-  const first = nextShownOrder(null, "rust", fast, shownMessageCount(10, false));
-  expect(first.keys.slice(0, first.shown)).toEqual(fast.slice(0, 5));
-  // The slow one's best match ranks first: shown rows hold, and it comes next.
-  const second = nextShownOrder(first, "rust", ["b0", ...fast], shownMessageCount(10, true));
-  expect(second.keys.slice(0, second.shown)).toEqual([
-    ...fast.slice(0, 5),
-    "b0",
-    ...fast.slice(5, 9),
-  ]);
-  expect(nextShownOrder(second, "rust", ["b0", ...fast], 10)).toBe(second);
+  // The fast environment answers first and fills the limit.
+  const fast = Array.from({ length: 12 }, (_, index) => `a${index}`);
+  const first = nextShownOrder(null, "rust", fast, 10);
+  expect(first.keys.slice(0, first.shown)).toEqual(fast.slice(0, 10));
+  // The slow one's matches rank first: shown rows hold, and its best few come next.
+  const slow = ["b0", "b1", "b2", "b3"];
+  const second = nextShownOrder(first, "rust", [...slow, ...fast], 10);
+  expect(second.keys.slice(0, second.shown)).toEqual([...fast.slice(0, 10), "b0", "b1", "b2"]);
+  // Nothing new: nothing moves and nothing grows.
+  expect(nextShownOrder(second, "rust", [...slow, ...fast], 10)).toBe(second);
   // A new query starts from its own ranking.
   expect(nextShownOrder(second, "rusty", ["b0"], 10).keys).toEqual(["b0"]);
 });
