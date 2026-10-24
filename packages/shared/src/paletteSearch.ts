@@ -530,24 +530,30 @@ function insideHexId(text: string, index: number, length: number): boolean {
   return end - start > length && HEX_ID.test(text.slice(start, end));
 }
 
-// Where `token` best sits in `folded`, a fold of `text`: a whole word, else a
-// word start, else inside a word.
+// Where `token` best sits in `folded`, a fold of `text`: every place it is a
+// whole word, else a word start, else inside a word.
 function findMessageToken(
   text: string,
   folded: string,
   token: string,
-): { readonly at: number; readonly quality: number } | null {
-  let best: { readonly at: number; readonly quality: number } | null = null;
+): { readonly at: ReadonlyArray<number>; readonly quality: number } | null {
+  let quality = 0;
+  let at: number[] = [];
   for (let index = folded.indexOf(token); index !== -1; index = folded.indexOf(token, index + 1)) {
-    if (!startsWordAt(text, index) || insideHexId(text, index, token.length)) {
-      best ??= { at: index, quality: MID_WORD };
-    } else if (endsWordAt(text, index + token.length)) {
-      return { at: index, quality: 1 };
-    } else if (best === null || best.quality === MID_WORD) {
-      best = { at: index, quality: MESSAGE_PREFIX };
+    const found =
+      !startsWordAt(text, index) || insideHexId(text, index, token.length)
+        ? MID_WORD
+        : endsWordAt(text, index + token.length)
+          ? 1
+          : MESSAGE_PREFIX;
+    if (found > quality) {
+      quality = found;
+      at = [index];
+    } else if (found === quality) {
+      at.push(index);
     }
   }
-  return best;
+  return at.length === 0 ? null : { at, quality };
 }
 
 export interface MessageMatch {
@@ -585,10 +591,9 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     let quality = 1;
     // The snippet shows the longest word, as the most telling: "sidebar", not
     // "the", in "fix the sidebar".
-    let offset = text.length;
     let longest = "";
     let longestAt = 0;
-    const positions: number[] = [];
+    const positions: Array<ReadonlyArray<number>> = [];
     for (const { token, folded: foldedToken, nonAscii, mustStartWord } of tokens) {
       let found = findMessageToken(text, plain, token);
       // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
@@ -599,12 +604,12 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
       if (found.quality === MID_WORD && mustStartWord) return null;
       quality = Math.min(quality, found.quality);
       if (token.length > longest.length) {
-        offset = found.at;
         longest = token;
         longestAt = positions.length;
       }
       positions.push(found.at);
     }
+    let offset = positions[longestAt]?.[0] ?? 0;
     // Written together as typed: the snippet starts there. Apostrophes are
     // straight in the query, and straightening keeps offsets.
     const together = phrase?.exec(plain.replace(CURLY_APOSTROPHES, "'"));
@@ -614,9 +619,9 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     } else if (positions.length > 1) {
       // Words apart: the longest where another word is nearest, so "lakebed
       // perf" shows "perf" too, not the first of many "lakebed"s.
-      const others = positions.filter((_, index) => index !== longestAt);
+      const others = positions.filter((_, index) => index !== longestAt).flat();
       let nearest = Number.POSITIVE_INFINITY;
-      for (let at = plain.indexOf(longest); at !== -1; at = plain.indexOf(longest, at + 1)) {
+      for (const at of positions[longestAt] ?? []) {
         for (const other of others) {
           if (Math.abs(at - other) < nearest) {
             nearest = Math.abs(at - other);

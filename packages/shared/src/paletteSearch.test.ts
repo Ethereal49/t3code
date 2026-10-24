@@ -664,6 +664,9 @@ describe("scoreMessageMatch", () => {
     // Words apart: the longest where another word is near.
     const apart = `The lakebed app. ${"Notes. ".repeat(30)}Lakebed page perf is slow`;
     expect(apart.slice(scoreMessageMatch(apart, "lakebed perf")?.offset)).toMatch(/^Lakebed page/);
+    // Only where a word counts: not "fix" in "prefix".
+    const prefix = `fix ${"unrelated words ".repeat(40)}prefix has CI`;
+    expect(scoreMessageMatch(prefix, "fix ci")?.offset).toBe(0);
     // A commit SHA is one word: "cafe" inside one only matches inside a word.
     expect(scoreMessageMatch("see commit 7cafe52bb8", "cafe")).toEqual({
       quality: 0.3,
