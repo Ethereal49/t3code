@@ -25,6 +25,7 @@ import { Input } from "../ui/input";
 import {
   applyGuestStreamEvent,
   formatGuestExpiry,
+  groupGuestTranscript,
   initialGuestStreamState,
   inviteShareId,
   type GuestStreamState,
@@ -315,11 +316,17 @@ function GuestThread({
       {/* column-reverse keeps the view pinned to the newest reply while the reader is at the bottom. */}
       <div className="scrollbar-gutter-both flex min-h-0 flex-1 flex-col-reverse overflow-y-auto">
         <ol className={cn(LANE, "flex flex-col gap-4 py-6")}>
-          {items.map((item) => (
-            <li key={item.id}>
-              <TranscriptItem item={item} ownMessageIds={ownMessageIds} />
-            </li>
-          ))}
+          {groupGuestTranscript(items).map((row) =>
+            row.kind === "work" ? (
+              <li key={row.id}>
+                <p className="truncate text-xs text-muted-foreground">{row.line}</p>
+              </li>
+            ) : (
+              <li key={row.item.id}>
+                <TranscriptItem item={row.item} ownMessageIds={ownMessageIds} />
+              </li>
+            ),
+          )}
           {unplaced.map((message) => (
             <li key={message.id}>
               <UnplacedGuestMessage message={message} />
@@ -420,7 +427,7 @@ function TranscriptItem({
         </div>
       );
     case "tool":
-      return <p className="truncate text-xs text-muted-foreground">{item.label}</p>;
+      return null;
   }
 }
 

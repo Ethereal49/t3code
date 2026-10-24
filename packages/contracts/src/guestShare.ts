@@ -134,7 +134,15 @@ export const GuestTranscriptItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("tool"),
     id: TrimmedNonEmptyString,
-    label: Schema.String,
+    /** Which kind of tool ran. Titles and arguments never reach a guest. */
+    tool: Schema.Literals([
+      "command",
+      "file_change",
+      "file_search",
+      "web_search",
+      "tool",
+      "subagent",
+    ]),
   }),
 ]);
 export type GuestTranscriptItem = typeof GuestTranscriptItem.Type;

@@ -8,14 +8,16 @@ import type {
   RunId,
 } from "@t3tools/contracts";
 
-// Fixed labels only: tool titles and arguments can carry paths, commands, and secrets.
-const TOOL_LABELS: Partial<Record<OrchestrationV2TurnItem["type"], string>> = {
-  command_execution: "Ran a command",
-  file_change: "Edited files",
-  file_search: "Searched files",
-  web_search: "Searched the web",
-  dynamic_tool: "Used a tool",
-  subagent: "Ran a subagent",
+// The kind only: tool titles and arguments can carry paths, commands, and secrets.
+const TOOL_KINDS: Partial<
+  Record<OrchestrationV2TurnItem["type"], Extract<GuestTranscriptItem, { kind: "tool" }>["tool"]>
+> = {
+  command_execution: "command",
+  file_change: "file_change",
+  file_search: "file_search",
+  web_search: "web_search",
+  dynamic_tool: "tool",
+  subagent: "subagent",
 };
 
 /**
@@ -60,8 +62,8 @@ export function guestTranscriptItem(item: OrchestrationV2TurnItem): GuestTranscr
         })),
       };
     default: {
-      const label = TOOL_LABELS[item.type];
-      return label === undefined ? null : { kind: "tool", id: item.id, label };
+      const tool = TOOL_KINDS[item.type];
+      return tool === undefined ? null : { kind: "tool", id: item.id, tool };
     }
   }
 }

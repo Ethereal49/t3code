@@ -157,3 +157,49 @@ export function inviteShareId(credential: string): string | null {
     return null;
   }
 }
+
+type GuestTool = Extract<GuestTranscriptItem, { kind: "tool" }>["tool"];
+
+/** A run of tool calls between two messages shows as one line, as the app's work log does. */
+export type GuestTranscriptRow =
+  | { readonly kind: "item"; readonly item: GuestTranscriptItem }
+  | { readonly kind: "work"; readonly id: string; readonly line: string };
+
+const WORK_PHRASES: Record<GuestTool, (count: number) => string> = {
+  command: (count) => (count === 1 ? "ran a command" : `ran ${count} commands`),
+  file_change: () => "edited files",
+  file_search: () => "searched files",
+  web_search: () => "searched the web",
+  tool: (count) => (count === 1 ? "used a tool" : `used ${count} tools`),
+  subagent: (count) => (count === 1 ? "ran a subagent" : `ran ${count} subagents`),
+};
+
+/** "Ran 8 commands, edited files": each kind once, in the order it first ran. */
+export function formatGuestWork(tools: ReadonlyArray<GuestTool>): string {
+  const counts = new Map<GuestTool, number>();
+  for (const tool of tools) counts.set(tool, (counts.get(tool) ?? 0) + 1);
+  const line = [...counts].map(([tool, count]) => WORK_PHRASES[tool](count)).join(", ");
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+export function groupGuestTranscript(
+  items: ReadonlyArray<GuestTranscriptItem>,
+): ReadonlyArray<GuestTranscriptRow> {
+  const rows: GuestTranscriptRow[] = [];
+  let work: { id: string; tools: GuestTool[] } | null = null;
+  const flush = () => {
+    if (work !== null) rows.push({ kind: "work", id: work.id, line: formatGuestWork(work.tools) });
+    work = null;
+  };
+  for (const item of items) {
+    if (item.kind === "tool") {
+      if (work === null) work = { id: item.id, tools: [] };
+      work.tools.push(item.tool);
+      continue;
+    }
+    flush();
+    rows.push({ kind: "item", item });
+  }
+  flush();
+  return rows;
+}

@@ -29,7 +29,7 @@ describe("guestTranscriptItem", () => {
       guestTranscriptItem(
         item({ type: "command_execution", command: "cat .env", output: "TOKEN=secret" }),
       ),
-    ).toEqual({ kind: "tool", id: "item", label: "Ran a command" });
+    ).toEqual({ kind: "tool", id: "item", tool: "command" });
   });
 
   it("drops reasoning, approvals, secret requests, and unknown items", () => {

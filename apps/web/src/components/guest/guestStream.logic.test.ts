@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyGuestStreamEvent,
   formatGuestExpiry,
+  groupGuestTranscript,
   initialGuestStreamState,
   inviteShareId,
   parseGuestStreamEvent,
@@ -32,7 +33,7 @@ const apply = (events: ReadonlyArray<GuestStreamEvent>, state = initialGuestStre
 describe("applyGuestStreamEvent", () => {
   it("replaces everything on snapshot, so a reconnect drops stale items", () => {
     const before = apply([
-      { type: "snapshot", view, items: [{ kind: "tool", id: "old", label: "Read file" }] },
+      { type: "snapshot", view, items: [{ kind: "tool", id: "old", tool: "file_search" }] },
       { type: "ended" },
     ]);
     const after = apply(
@@ -92,7 +93,7 @@ describe("applyGuestStreamEvent", () => {
     const state = apply([
       { type: "snapshot", view, items: [] },
       { type: "item", item: { kind: "assistant", id: "a1", text: "Hel", streaming: true } },
-      { type: "item", item: { kind: "tool", id: "t1", label: "Ran tests" } },
+      { type: "item", item: { kind: "tool", id: "t1", tool: "command" } },
       { type: "item", item: { kind: "assistant", id: "a1", text: "Hello", streaming: false } },
     ]);
     expect(state.items.map((item) => item.id)).toEqual(["a1", "t1"]);
@@ -185,5 +186,25 @@ describe("inviteShareId", () => {
     expect(inviteShareId(`${payload}.signature`)).toBe("share-1");
     expect(inviteShareId("not-base64!.sig")).toBeNull();
     expect(inviteShareId("")).toBeNull();
+  });
+});
+
+describe("groupGuestTranscript", () => {
+  it("folds each stretch of tool calls into one line between messages", () => {
+    const tool = (id: string, kind: "command" | "file_search") =>
+      ({ kind: "tool", id, tool: kind }) as const;
+    const text = { kind: "assistant", id: "a1", text: "Done", streaming: false } as const;
+    const rows = groupGuestTranscript([
+      tool("t1", "command"),
+      tool("t2", "file_search"),
+      tool("t3", "command"),
+      text,
+      tool("t4", "command"),
+    ]);
+    expect(rows).toEqual([
+      { kind: "work", id: "t1", line: "Ran 2 commands, searched files" },
+      { kind: "item", item: text },
+      { kind: "work", id: "t4", line: "Ran a command" },
+    ]);
   });
 });
