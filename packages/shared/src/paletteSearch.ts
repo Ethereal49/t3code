@@ -525,19 +525,10 @@ function endsWordAt(text: string, end: number): boolean {
 // A commit SHA or UUID part: seven or more hex characters with a digit.
 const HEX_ID = /^(?=[a-f]*\d)[0-9a-f]{7,}$/i;
 
-// Whether `index` sits past the start of a hex ID: its letters after digits
-// are not words ("cafe" in "7cafe52bb8"), though a pasted SHA prefix is.
-function insideHexId(text: string, index: number, length: number): boolean {
-  let start = index;
-  while (start > 0 && ALPHANUMERIC.test(text[start - 1]!)) start--;
-  if (start === index) return false;
-  let end = index + length;
-  while (end < text.length && ALPHANUMERIC.test(text[end]!)) end++;
-  return HEX_ID.test(text.slice(start, end));
-}
-
 // Where `token` best sits in `folded`, a fold of `text`: every place it is a
-// whole word, else a word start, else inside a word. Hits inside IDs do not count.
+// whole word, else a word start, else inside a word. Hits past the start of a
+// hex ID do not count ("cafe" in "7cafe52bb8"), though a pasted SHA prefix
+// does.
 function findMessageToken(
   text: string,
   folded: string,
@@ -545,8 +536,19 @@ function findMessageToken(
 ): { readonly at: ReadonlyArray<number>; readonly quality: number } | null {
   let quality = 0;
   let at: number[] = [];
+  // The letters-and-digits run around the hit, kept for later hits in the
+  // same run: rescanning it per hit is quadratic in a long run ("0000" in a
+  // hex dump).
+  let run = { start: 0, end: -1, hex: false };
   for (let index = folded.indexOf(token); index !== -1; index = folded.indexOf(token, index + 1)) {
-    if (insideHexId(text, index, token.length)) continue;
+    if (index + token.length > run.end) {
+      let start = index;
+      while (start > 0 && ALPHANUMERIC.test(text[start - 1]!)) start--;
+      let end = index + token.length;
+      while (end < text.length && ALPHANUMERIC.test(text[end]!)) end++;
+      run = { start, end, hex: HEX_ID.test(text.slice(start, end)) };
+    }
+    if (run.hex && run.start < index) continue;
     const found = !startsWordAt(text, index)
       ? MID_WORD
       : endsWordAt(text, index + token.length)
