@@ -52,46 +52,27 @@ function coalescibleUpdateKey(input: ThreadLiveEvent): string | null {
 export function coalesceLiveUpdatedEvents(
   events: ReadonlyArray<ThreadLiveEvent>,
 ): ReadonlyArray<ThreadLiveEvent> {
-  const survivors: Array<ThreadLiveEvent> = [];
-  let pendingUpdates: Array<ThreadLiveEvent> = [];
+  const latestUpdates = new Map<string, number>();
+  const superseded = new Set<number>();
   let pendingMessageKey: string | null = null;
 
-  const flushUpdates = () => {
-    const seen = new Set<string>();
-    const latestUpdates: Array<ThreadLiveEvent> = [];
-    for (let index = pendingUpdates.length - 1; index >= 0; index -= 1) {
-      const event = pendingUpdates[index]!;
-      const key = coalescibleUpdateKey(event);
-      if (key && seen.has(key)) {
-        continue;
-      }
-      if (key) {
-        seen.add(key);
-      }
-      latestUpdates.push(event);
-    }
-    latestUpdates.reverse();
-    survivors.push(...latestUpdates);
-    pendingUpdates = [];
-    pendingMessageKey = null;
-  };
-
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
     const key = coalescibleUpdateKey(event);
-    if (key !== null) {
-      if (event.event.type === "message.updated") {
-        // Clients use message insertion order to select the last assistant.
-        if (pendingMessageKey !== null && pendingMessageKey !== key) flushUpdates();
-        pendingMessageKey = key;
-      }
-      pendingUpdates.push(event);
+    if (key === null) {
+      latestUpdates.clear();
+      pendingMessageKey = null;
       continue;
     }
-    flushUpdates();
-    survivors.push(event);
+    if (event.event.type === "message.updated") {
+      // Clients use message insertion order to select the last assistant.
+      if (pendingMessageKey !== null && pendingMessageKey !== key) latestUpdates.clear();
+      pendingMessageKey = key;
+    }
+    const previous = latestUpdates.get(key);
+    if (previous !== undefined) superseded.add(previous);
+    latestUpdates.set(key, index);
   }
-  flushUpdates();
-  return survivors;
+  return events.filter((_, index) => !superseded.has(index));
 }
 
 export const makeThreadLiveEventCoalescer = Effect.fn(
