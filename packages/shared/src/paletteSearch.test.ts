@@ -151,6 +151,14 @@ describe("scoreThreadSearch", () => {
       }),
     ];
     expect(rankTitles("fix", exact)).toEqual(["Fix sidebar", "Fix browser"]);
+    // A pick for a longer query does not pass the thread named by the query.
+    const named = [
+      thread("Lakebed perf audit", {
+        opens: { openedAt: NOW, score: 1, picks: [{ query: "lakebed perf", at: NOW }] },
+      }),
+      thread("Lakebed"),
+    ];
+    expect(rankTitles("lakebed", named)).toEqual(["Lakebed", "Lakebed perf audit"]);
   });
 
   it("finds a branch pasted with the app's worktree prefix", () => {
@@ -201,6 +209,11 @@ describe("scoreThreadSearch", () => {
     expect(rankTitles("22889", [thread("Stats", { pullRequests: [{ number: 22189 }] })])).toEqual(
       [],
     );
+    // Words with digits still forgive one.
+    expect(rankTitles("t3coed", [thread("t3code perf audit"), thread("Other")])).toEqual([
+      "t3code perf audit",
+    ]);
+    expect(rankTitles("oath2", [thread("Fix oauth2 redirect")])).toEqual(["Fix oauth2 redirect"]);
     // A typo beats a mid-word accident: "ilde" is "idle", not the middle of "Builder".
     expect(
       rankTitles("ilde", [thread("Typesafe App Builder"), thread("De-risk idle tunnel cleanup")]),

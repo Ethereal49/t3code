@@ -189,7 +189,11 @@ export function nextShownOrder(
   const rest = ranked.filter((key) => !held.has(key));
   const arrived = rest.filter((key) => !seen.has(key)).length;
   const keys = [...kept, ...rest];
-  const shown = Math.min(keys.length, Math.max(limit, kept.length + Math.min(arrived, LATE_ROOM)));
+  const shown = Math.min(
+    keys.length,
+    limit + LATE_ROOM,
+    Math.max(limit, kept.length + Math.min(arrived, LATE_ROOM)),
+  );
   const unchanged =
     shown === previous.shown &&
     keys.length === previous.keys.length &&

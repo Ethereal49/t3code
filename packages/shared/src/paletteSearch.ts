@@ -17,6 +17,7 @@ const ALPHANUMERIC = /[\p{L}\p{N}]/u;
 const LOWERCASE = /\p{Ll}/u;
 const UPPERCASE = /\p{Lu}/u;
 const DIGIT = /\p{N}/u;
+const LETTER = /\p{L}/u;
 const COMBINING_MARKS = /\p{M}/gu;
 // Emoji and other symbols can be searched for, so they start words too.
 const SYMBOL = /\p{So}/u;
@@ -248,8 +249,8 @@ function matchToken(
     if (joined) return joined;
   }
   if ((best !== null && best.score > MID_WORD) || !typos || token.length < 3) return best;
-  // Numbers skip typos: 22889 is not 22189.
-  if (!DIGIT.test(token)) {
+  // Numbers skip typos: #22889 is not #22189. Words with digits ("t3code") do not.
+  if (LETTER.test(token)) {
     for (let index = 0; index < field.text.length; index++) {
       if (!field.wordStarts[index]) continue;
       // People rarely mistype the first letter, so a typo keeps it, unless it
@@ -1085,8 +1086,9 @@ export interface RankedSearchItem<T, M> {
 
 /**
  * Ranks grouped items: within a group, word matches before weaker ones,
- * results picked for the query first among them, then by match class, then
- * best score. Groups with no match are dropped. The rest order by the class of
+ * results picked for exactly the query first among them (the latest pick
+ * first), then by match class, then results picked for a query that starts
+ * with this one, then best score. Groups with no match are dropped. The rest order by the class of
  * their best match (the whole name, word starts in a name, typos in a name or
  * keyword matches, or weaker), and ties keep the given order. Classes
  * rather than scores keep the group order steady while a word is typed, and
@@ -1131,14 +1133,16 @@ export function rankSearchGroups<
       // Use decides within a match class, never across one: a busy thread
       // matched through its project does not pass a title that holds the words.
       // Picks reorder word matches but never lift a match inside a word or a
-      // typo above one.
+      // typo above one, and a pick for a longer query ("lakebed perf") does not
+      // pass the result whose whole name is the query ("Lakebed").
       const wordMatch = (match: M) => Math.min(matchClass(match.quality), 2);
+      const exactPickAt = (match: M) => (match.pickedExactly ? (match.pickedAt ?? 0) : 0);
       const sorted = [...items].sort(
         (left, right) =>
           wordMatch(right.match) - wordMatch(left.match) ||
-          Number(right.match.pickedExactly ?? false) - Number(left.match.pickedExactly ?? false) ||
-          (right.match.pickedAt ?? 0) - (left.match.pickedAt ?? 0) ||
+          exactPickAt(right.match) - exactPickAt(left.match) ||
           matchClass(right.match.quality) - matchClass(left.match.quality) ||
+          (right.match.pickedAt ?? 0) - (left.match.pickedAt ?? 0) ||
           right.match.score - left.match.score,
       );
       const best = Math.max(

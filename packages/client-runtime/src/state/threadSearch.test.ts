@@ -182,6 +182,10 @@ it("keeps shown message rows in place and leaves room for a slower environment",
   expect(second.keys.slice(0, second.shown)).toEqual([...fast.slice(0, 10), "b0", "b1", "b2"]);
   // Nothing new: nothing moves and nothing grows.
   expect(nextShownOrder(second, "rust", [...slow, ...fast], 10)).toBe(second);
+  // A third environment gets no more room past the limit.
+  const third = nextShownOrder(second, "rust", ["c0", ...slow, ...fast], 10);
+  expect(third.shown).toBe(13);
+  expect(third.keys.slice(0, 13)).toEqual(second.keys.slice(0, 13));
   // A new query starts from its own ranking.
   expect(nextShownOrder(second, "rusty", ["b0"], 10).keys).toEqual(["b0"]);
 });
