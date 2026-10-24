@@ -44,6 +44,8 @@ import {
 } from "./guestTranscript.ts";
 
 const SIGNING_SECRET_NAME = "guest-share-signing-key";
+const SHARE_ID_BYTES = 16;
+const INVITE_SIGNATURE_BYTES = 16;
 const SNAPSHOT_ROW_LIMIT = 600;
 const HOST_RECHECK_INTERVAL = Duration.seconds(30);
 const SNAPSHOT_USER_TURN_LIMIT = 20;
@@ -82,13 +84,22 @@ const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
         ? "busy"
         : "rejected";
 
-const TokenClaims = Schema.Struct({
-  kind: Schema.Literals(["invite", "session"]),
+const SessionClaims = Schema.Struct({
+  kind: Schema.Literal("session"),
   threadId: ThreadId,
   shareId: GuestShareId,
 });
-type TokenClaims = typeof TokenClaims.Type;
-const decodeClaims = Schema.decodeUnknownOption(Schema.fromJsonString(TokenClaims));
+type SessionClaims = typeof SessionClaims.Type;
+const decodeSessionClaims = Schema.decodeUnknownOption(Schema.fromJsonString(SessionClaims));
+
+/** A truncated HMAC keeps invite links short. 128 bits is still far beyond guessing range. */
+const inviteSignature = (shareId: string, key: Uint8Array) =>
+  base64UrlEncode(
+    Buffer.from(signPayload(`guest-invite:${shareId}`, key), "base64url").subarray(
+      0,
+      INVITE_SIGNATURE_BYTES,
+    ),
+  );
 
 const inactive = new GuestShareAccessError({ reason: "inactive" });
 
@@ -127,22 +138,43 @@ const make = Effect.gen(function* () {
   );
 
   // Tokens are derived from the share id, so nothing secret is stored and replacing or closing
-  // the share in the thread projection revokes every token for it.
-  const sign = (claims: TokenClaims) =>
+  // the share in the thread projection revokes every token for it. An invite is
+  // `<shareId>.<signature>` and the thread is looked up by share id; a session token carries
+  // signed claims.
+  const signInvite = (shareId: GuestShareId) =>
+    Effect.map(signingKey, (key) => `${shareId}.${inviteSignature(shareId, key)}`);
+  const signSession = (claims: SessionClaims) =>
     Effect.map(signingKey, (key) => {
       const payload = base64UrlEncode(JSON.stringify(claims));
       return `${payload}.${signPayload(payload, key)}`;
     });
-  const verify = (token: string, kind: TokenClaims["kind"]) =>
+  const splitToken = (token: string) => {
+    const [payload, signature, extra] = token.split(".");
+    return payload && signature && extra === undefined ? { payload, signature } : null;
+  };
+  const verifyInvite = Effect.fn("GuestShareService.verifyInvite")(function* (token: string) {
+    const parts = splitToken(token);
+    if (parts === null) return Option.none<SessionClaims>();
+    const key = yield* signingKey;
+    if (!timingSafeEqualBase64Url(parts.signature, inviteSignature(parts.payload, key))) {
+      return Option.none<SessionClaims>();
+    }
+    const shareId = GuestShareId.make(parts.payload);
+    const threadId = yield* orchestrator
+      .findGuestShareThreadId(shareId)
+      .pipe(Effect.mapError(() => inactive));
+    return threadId === null
+      ? Option.none<SessionClaims>()
+      : Option.some<SessionClaims>({ kind: "session", threadId, shareId });
+  });
+  const verifySession = (token: string) =>
     Effect.map(signingKey, (key) => {
-      const [payload, signature, extra] = token.split(".");
-      if (!payload || !signature || extra !== undefined) return Option.none<TokenClaims>();
-      if (!timingSafeEqualBase64Url(signature, signPayload(payload, key))) {
-        return Option.none<TokenClaims>();
+      const parts = splitToken(token);
+      if (parts === null) return Option.none<SessionClaims>();
+      if (!timingSafeEqualBase64Url(parts.signature, signPayload(parts.payload, key))) {
+        return Option.none<SessionClaims>();
       }
-      return decodeClaims(base64UrlDecodeUtf8(payload)).pipe(
-        Option.filter((claims) => claims.kind === kind),
-      );
+      return decodeSessionClaims(base64UrlDecodeUtf8(parts.payload));
     });
 
   const connectHostname = managedEndpoint.inspectConnector.pipe(
@@ -170,9 +202,9 @@ const make = Effect.gen(function* () {
   /** Checks a token against the live share: same id, not expired, and Connect still serving it. */
   const authorize = Effect.fn("GuestShareService.authorize")(function* (
     token: string,
-    kind: TokenClaims["kind"],
+    kind: "invite" | "session",
   ) {
-    const claims = yield* verify(token, kind);
+    const claims = yield* kind === "invite" ? verifyInvite(token) : verifySession(token);
     if (Option.isNone(claims)) {
       return yield* new GuestShareAccessError({ reason: "invalid" });
     }
@@ -200,7 +232,9 @@ const make = Effect.gen(function* () {
     if (host === null) {
       return yield* new GuestShareCreateError({ reason: "connect_unavailable" });
     }
-    const shareId = GuestShareId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+    const shareId = GuestShareId.make(
+      base64UrlEncode(yield* crypto.randomBytes(SHARE_ID_BYTES).pipe(Effect.orDie)),
+    );
     const now = yield* DateTime.now;
     const expiresAt = DateTime.formatIso(DateTime.add(now, { milliseconds: GUEST_SHARE_TTL_MS }));
     yield* orchestrator
@@ -219,7 +253,7 @@ const make = Effect.gen(function* () {
     if (!thread.guestShare || thread.guestShare.id !== shareId) {
       return yield* new GuestShareCreateError({ reason: "changed" });
     }
-    const credential = yield* sign({ kind: "invite", threadId: input.threadId, shareId });
+    const credential = yield* signInvite(shareId);
     return { url: `https://${host}/guest#${credential}`, share: thread.guestShare };
   });
 
@@ -232,7 +266,7 @@ const make = Effect.gen(function* () {
       shareId: share.id,
       guestName: request.name,
     });
-    const token = yield* sign({ kind: "session", threadId: thread.id, shareId: share.id });
+    const token = yield* signSession({ kind: "session", threadId: thread.id, shareId: share.id });
     return { token, shareId: share.id };
   });
 

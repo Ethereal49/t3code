@@ -36,6 +36,7 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
+  GuestShareId,
   ProjectId,
   ProviderSessionId,
   ProviderThreadId,
@@ -464,6 +465,10 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadShell: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadShell | null, ProjectionStoreV2Error>;
+  /** The thread whose current guest share has this id. Scans thread rows; only redeem uses it. */
+  readonly findGuestShareThreadId: (
+    shareId: GuestShareId,
+  ) => Effect.Effect<ThreadId | null, ProjectionStoreV2Error>;
   readonly getThread: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2AppThread, ProjectionStoreV2Error>;
@@ -6478,6 +6483,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError(shellSnapshotReadError),
     );
 
+    const findGuestShareThreadId = Effect.fn("ProjectionStore.findGuestShareThreadId")(function* (
+      shareId: GuestShareId,
+    ) {
+      const rows = yield* sql<{ readonly thread_id: string }>`
+        SELECT thread_id
+        FROM orchestration_v2_projection_threads
+        WHERE json_extract(payload_json, '$.guestShare.id') = ${shareId}
+        LIMIT 1
+      `;
+      return rows[0] === undefined ? null : ThreadId.make(rows[0].thread_id);
+    }, Effect.mapError(shellSnapshotReadError));
+
     const getThreadShell: ProjectionStoreV2Shape["getThreadShell"] = (threadId) =>
       sql
         .withTransaction(
@@ -6573,6 +6590,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
       readShellSnapshot: readOnReader(readShellSnapshot),
       getThreadShell: readOnReader(getThreadShell),
+      findGuestShareThreadId: readOnReader(findGuestShareThreadId),
       getThread: readOnReader(getThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
@@ -6704,6 +6722,15 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           .pipe(Effect.map(threadShellFromProjection));
         return shell.deletedAt === null ? shell : null;
       }),
+      findGuestShareThreadId: Effect.fn("ProjectionStore.findGuestShareThreadId")(
+        function* (shareId) {
+          const existing = (yield* Ref.get(replayState)).projections;
+          for (const { thread } of existing.values()) {
+            if (thread.guestShare?.id === shareId) return thread.id;
+          }
+          return null;
+        },
+      ),
       getThread: Effect.fn("ProjectionStore.getThread")(function* (threadId) {
         const projection = (yield* Ref.get(replayState)).projections.get(threadId);
         if (projection === undefined) {

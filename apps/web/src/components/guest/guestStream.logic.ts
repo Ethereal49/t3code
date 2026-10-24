@@ -140,22 +140,13 @@ export function formatGuestExpiry(expiresAt: string, nowMs: number): string {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h left` : `${minutes}m left`;
 }
 
-const InvitePayload = Schema.Struct({ shareId: Schema.String });
-const decodeInvitePayload = Schema.decodeUnknownOption(Schema.fromJsonString(InvitePayload));
-
 /**
- * The share an invite opens, read from its unsigned payload. Only used to name the share in the
- * page URL and to find this browser's session for it; the server checks the signature.
+ * The share an invite (`<shareId>.<signature>`) opens. Only used to name the share in the page
+ * URL and to find this browser's session for it; the server checks the signature.
  */
 export function inviteShareId(credential: string): string | null {
-  const [payload] = credential.split(".", 1);
-  if (!payload) return null;
-  try {
-    const json = atob(payload.replaceAll("-", "+").replaceAll("_", "/"));
-    return Option.getOrNull(Option.map(decodeInvitePayload(json), ({ shareId }) => shareId));
-  } catch {
-    return null;
-  }
+  const [shareId, signature] = credential.split(".");
+  return shareId && signature ? shareId : null;
 }
 
 type GuestTool = Extract<GuestTranscriptItem, { kind: "tool" }>["tool"];

@@ -119,6 +119,25 @@ it.effect("spends an invite once and ends the guest stream when the owner stops 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("redeems only a short invite whose signature and share id are both current", () =>
+  Effect.gen(function* () {
+    const { guestShares, credential: replaced } = yield* shareThread;
+    const { url } = yield* guestShares.create({ threadId });
+    const credential = url.slice(url.indexOf("#") + 1);
+    assert.match(credential, /^[\w-]{22}\.[\w-]{22}$/);
+
+    const [shareId, signature] = credential.split(".");
+    const tampered = `${shareId}.${signature!.startsWith("A") ? "B" : "A"}${signature!.slice(1)}`;
+    for (const rejected of [tampered, replaced]) {
+      const error = yield* Effect.flip(guestShares.redeem({ credential: rejected, name: "Eve" }));
+      assert.equal(error.reason, "invalid");
+    }
+    assert.isTrue(
+      Exit.isSuccess(yield* Effect.exit(guestShares.redeem({ credential, name: "Sam" }))),
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("refuses guest requests once T3 Connect no longer serves the link's host", () =>
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;

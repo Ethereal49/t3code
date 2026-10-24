@@ -178,13 +178,10 @@ describe("formatGuestExpiry", () => {
 });
 
 describe("inviteShareId", () => {
-  it("reads the share from an invite's payload and rejects anything else", () => {
-    const payload = btoa(JSON.stringify({ kind: "invite", threadId: "t", shareId: "share-1" }))
-      .replaceAll("+", "-")
-      .replaceAll("/", "_")
-      .replace(/=+$/, "");
-    expect(inviteShareId(`${payload}.signature`)).toBe("share-1");
-    expect(inviteShareId("not-base64!.sig")).toBeNull();
+  it("reads the share id before the signature and rejects anything else", () => {
+    expect(inviteShareId("k3J9xQ2mT8vL5nR1pW7yZa.sig")).toBe("k3J9xQ2mT8vL5nR1pW7yZa");
+    expect(inviteShareId("no-signature")).toBeNull();
+    expect(inviteShareId(".sig")).toBeNull();
     expect(inviteShareId("")).toBeNull();
   });
 });
