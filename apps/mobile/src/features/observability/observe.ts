@@ -3,16 +3,14 @@ import { Observe } from "expo-observe";
 
 /**
  * Importing expo-observe installs its handler for unhandled JavaScript errors,
- * and its native side records crashes. Reports leave the device only when the
- * build points Observe at the relay; without that (forks, local builds with no
- * relay configured) Observe would fall back to Expo's own ingest under this
- * app's EAS project, so dispatching stays off.
+ * and its native side records crashes. Reports leave the device only through
+ * the relay; builds without one (forks, local builds) keep dispatching off.
  */
-const endpointUrl: unknown = Constants.expoConfig?.extra?.eas?.observe?.endpointUrl;
+const relayUrl: unknown = Constants.expoConfig?.extra?.relay?.url;
 const appVariant: unknown = Constants.expoConfig?.extra?.appVariant;
 
 /** Whether this build has anywhere to send crash reports. */
-export const crashReportingAvailable = typeof endpointUrl === "string";
+export const crashReportingAvailable = typeof relayUrl === "string" && relayUrl.trim() !== "";
 
 let latestConfiguration = 0;
 
@@ -45,8 +43,15 @@ if (!crashReportingAvailable) {
   // ahead of the imports `index.ts` orders first.
   void import("../../persistence/imperative")
     .then(({ loadPreferences }) => loadPreferences())
-    .then((preferences) => setCrashReportsEnabled(preferences.crashReportsEnabled !== false))
+    .then(
+      (preferences) => setCrashReportsEnabled(preferences.crashReportsEnabled !== false),
+      (error: unknown) => {
+        // The choice is unknown, so this session does not send.
+        console.warn("[observe] could not read the crash report setting", error);
+        return setCrashReportsEnabled(false);
+      },
+    )
     .catch((error: unknown) => {
-      console.warn("[observe] could not read the crash report setting", error);
+      console.warn("[observe] could not apply the crash report setting", error);
     });
 }

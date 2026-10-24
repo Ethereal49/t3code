@@ -141,6 +141,9 @@ function CrashReportsSetting() {
       })
       .catch((error: unknown) => {
         console.warn("[diagnostics] could not read the crash report setting", error);
+        // The choice is unknown, so sending stays off until it is set here.
+        void setCrashReportsEnabled(false);
+        if (!cancelled) setEnabled(false);
       });
     return () => {
       cancelled = true;
@@ -150,12 +153,15 @@ function CrashReportsSetting() {
   const change = (value: boolean) => {
     setEnabled(value);
     setSaving(true);
+    // Sending stops before the save and starts only after it.
+    if (!value) void setCrashReportsEnabled(false);
     savePreferencesPatch({ crashReportsEnabled: value })
       .then(
-        () => setCrashReportsEnabled(value),
+        () => (value ? setCrashReportsEnabled(true) : undefined),
         (error: unknown) => {
           console.warn("[diagnostics] could not save the crash report setting", error);
           setEnabled(!value);
+          return value ? undefined : setCrashReportsEnabled(true);
         },
       )
       .catch((error: unknown) => {
