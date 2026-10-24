@@ -586,7 +586,9 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     // The snippet shows the longest word, as the most telling: "sidebar", not
     // "the", in "fix the sidebar".
     let offset = text.length;
-    let offsetTokenLength = 0;
+    let longest = "";
+    let longestAt = 0;
+    const positions: number[] = [];
     for (const { token, folded: foldedToken, nonAscii, mustStartWord } of tokens) {
       let found = findMessageToken(text, plain, token);
       // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
@@ -596,10 +598,12 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
       if (found === null) return null;
       if (found.quality === MID_WORD && mustStartWord) return null;
       quality = Math.min(quality, found.quality);
-      if (token.length > offsetTokenLength) {
+      if (token.length > longest.length) {
         offset = found.at;
-        offsetTokenLength = token.length;
+        longest = token;
+        longestAt = positions.length;
       }
+      positions.push(found.at);
     }
     // Written together as typed: the snippet starts there. Apostrophes are
     // straight in the query, and straightening keeps offsets.
@@ -607,6 +611,19 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     if (together) {
       offset = together.index;
       quality += MESSAGE_PHRASE_BONUS;
+    } else if (positions.length > 1) {
+      // Words apart: the longest where another word is nearest, so "lakebed
+      // perf" shows "perf" too, not the first of many "lakebed"s.
+      const others = positions.filter((_, index) => index !== longestAt);
+      let nearest = Number.POSITIVE_INFINITY;
+      for (let at = plain.indexOf(longest); at !== -1; at = plain.indexOf(longest, at + 1)) {
+        for (const other of others) {
+          if (Math.abs(at - other) < nearest) {
+            nearest = Math.abs(at - other);
+            offset = at;
+          }
+        }
+      }
     }
     return { quality, offset };
   };
