@@ -357,6 +357,8 @@ interface SearchFieldsMatch {
   readonly primaryRanges: ReadonlyArray<SearchRange>;
 }
 
+const FILLER_WORDS = new Set(["a", "an", "and", "for", "in", "of", "on", "the", "to", "with"]);
+
 // Sorted, with overlapping ranges joined.
 function mergeRanges(ranges: ReadonlyArray<SearchRange>): SearchRange[] {
   const merged: SearchRange[] = [];
@@ -396,8 +398,12 @@ function matchSearchFields(
   // An empty token would match everywhere, and loop forever in `matchToken`.
   const tokens = normalizedQuery.split(" ").filter((token) => token.length > 0);
   if (tokens.length === 0) return null;
+  // A phrase-style query ("fix the sidebar") carries filler words a name may
+  // leave out; they count where they match but are not required.
+  const fillerOptional = tokens.some((token) => !FILLER_WORDS.has(token));
   const primaryRanges: SearchRange[] = [];
   let total = 0;
+  let counted = 0;
   let strong = true;
   for (const token of tokens) {
     let best = 0;
@@ -413,12 +419,16 @@ function matchSearchFields(
       if (match.score >= 0.7 && !context) atWordStart = true;
       if (match.score * weight > best) best = match.score * weight;
     }
-    if (best === 0) return null;
+    if (best === 0) {
+      if (fillerOptional && FILLER_WORDS.has(token)) continue;
+      return null;
+    }
     strong &&= atWordStart;
     if (bestPrimary) primaryRanges.push(...(bestPrimary.letters ?? [bestPrimary]));
     total += best;
+    counted += 1;
   }
-  let quality = total / tokens.length;
+  let quality = total / counted;
   if (primary) {
     if (primary.text === normalizedQuery) quality += WHOLE_NAME - WHOLE_WORD;
     else if (tokens.length > 1 && primary.text.includes(normalizedQuery)) quality += 0.25;
@@ -446,6 +456,8 @@ export function messageSearchTokens(query: string): {
 } {
   const tokens = query
     .replace(WRAPPING_QUOTES, "")
+    // The index stores apostrophes straight, as `indexedMessageText` writes them.
+    .replace(/[‘’]/g, "'")
     .normalize("NFC")
     .toLowerCase()
     .split(/\s+/)
@@ -537,7 +549,10 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
   const plain = lower.length === text.length ? lower : foldInPlace(text);
   let folded: string | null = null;
   let quality = 1;
+  // The snippet shows the longest word, as the most telling: "sidebar", not
+  // "the", in "fix the sidebar".
   let offset = text.length;
+  let offsetTokenLength = 0;
   for (const token of [...long, ...short]) {
     let found = findMessageToken(text, plain, token);
     // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
@@ -555,7 +570,10 @@ export function scoreMessageMatch(text: string, query: string): MessageMatch | n
       return null;
     }
     quality = Math.min(quality, found.quality);
-    offset = Math.min(offset, found.at);
+    if (token.length > offsetTokenLength) {
+      offset = found.at;
+      offsetTokenLength = token.length;
+    }
   }
   return { quality, offset };
 }

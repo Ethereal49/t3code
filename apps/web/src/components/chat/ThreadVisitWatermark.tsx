@@ -32,10 +32,12 @@ export function ThreadVisitWatermark(props: { readonly threadRef: ScopedThreadRe
   // palette pick already sent it with the query. It runs before the watermark
   // effect, which then sees this watermark as sent.
   useEffect(() => {
-    if (!serverThread?.id || serverThread.lastVisitedAt === undefined) return;
+    if (!serverThread?.id) return;
     if (recordedOpenRef.current === threadKey) return;
     recordedOpenRef.current = threadKey;
-    if (!claimThreadOpen(serverThread.environmentId, serverThread.id, Date.now())) return;
+    // Recorded here even when the server cannot take opens, so recents follow it.
+    const claimed = claimThreadOpen(serverThread.environmentId, serverThread.id, Date.now());
+    if (!claimed || serverThread.lastVisitedAt === undefined) return;
     lastDispatchedVisitRef.current = `${threadKey}:${serverThread.updatedAt}`;
     lastVisitDispatchAtRef.current = Date.now();
     void visitThreadMutation({

@@ -340,6 +340,21 @@ describe("buildThreadActionItems", () => {
     expect(groups[1]?.items.at(-1)?.title).toBe("New thread layout");
   });
 
+  it("ends message results with a pending row while message search runs", () => {
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [],
+      query: "needle",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+      messagesPending: true,
+    });
+    expect(groups.at(-1)).toMatchObject({
+      label: "In messages",
+      items: [{ title: "Searching messages…", disabled: true }],
+    });
+  });
+
   it("lists a project above threads that only hold its name when the name is typed", () => {
     const threadSearchItems = buildThreadActionItems({
       threads: [makeThread({ title: "Lakebed performance gains" })],

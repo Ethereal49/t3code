@@ -212,6 +212,9 @@ describe("scoreThreadSearch", () => {
     ]);
     expect(rankTitles("sidb", [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
     expect(rankTitles("cron", [thread("Config cleanup")])).toEqual([]);
+    // Filler words in a phrase-style query are not required, but alone they are.
+    expect(rankTitles("fix the sidebar", [thread("Fix Sidebar Lag")])).toEqual(["Fix Sidebar Lag"]);
+    expect(rankTitles("the", [thread("Fix sidebar lag")])).toEqual([]);
     // A typed straight apostrophe finds a curly one.
     expect(rankTitles("don't", [thread("Don’t merge yet")])).toEqual(["Don’t merge yet"]);
     // Typos count across camelCase joins.
@@ -632,6 +635,9 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("We trust the build", "rust")).toEqual({ quality: 0.3, offset: 4 });
     expect(scoreMessageMatch("Rust and trust", "rust")).toEqual({ quality: 1, offset: 0 });
     expect(scoreMessageMatch("Use the sidebar", '"sidebar"')).toEqual({ quality: 1, offset: 8 });
+    // The snippet shows the longest word, not an early filler word.
+    const phrase = "Yes. Since the last fix, the sidebar works";
+    expect(scoreMessageMatch(phrase, "fix the sidebar")?.offset).toBe(phrase.indexOf("sidebar"));
     // A commit SHA is one word: "cafe" inside one only matches inside a word.
     expect(scoreMessageMatch("see commit 7cafe52bb8", "cafe")).toEqual({
       quality: 0.3,

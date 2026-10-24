@@ -508,6 +508,8 @@ export function filterCommandPaletteGroups(input: {
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
   threadMessageItems?: ReadonlyArray<CommandPaletteActionItem>;
+  /** Message search is still running, so more message results may arrive. */
+  messagesPending?: boolean;
   now?: number;
 }): CommandPaletteGroup[] {
   const isActionsFilter = input.query.startsWith(">");
@@ -585,11 +587,24 @@ export function filterCommandPaletteGroups(input: {
     return { value: group.value, label: group.label, items };
   });
 
-  if (!searchesEverything || !input.threadMessageItems?.length) return groups;
+  if (!searchesEverything) return groups;
   const listed = new Set(groups.flatMap((group) => group.items.map((item) => item.value)));
-  const messageItems = input.threadMessageItems
+  const messageItems = (input.threadMessageItems ?? [])
     .filter((item) => !listed.has(item.value))
     .slice(0, PALETTE_MESSAGE_LIMIT);
+  // A static last row, so a list that looks finished is not taken for one
+  // while a slower environment still answers.
+  if (input.messagesPending && messageItems.length < PALETTE_MESSAGE_LIMIT) {
+    messageItems.push({
+      kind: "action",
+      value: "threads-messages:pending",
+      searchTerms: [],
+      title: "Searching messages…",
+      icon: null,
+      disabled: true,
+      run: async () => undefined,
+    });
+  }
   return messageItems.length === 0
     ? groups
     : [...groups, { value: "threads-messages", label: "In messages", items: messageItems }];

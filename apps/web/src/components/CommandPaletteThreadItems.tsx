@@ -149,13 +149,15 @@ export function useCommandPaletteThreadItems(input: {
       // it; the thread view then skips its own open. The open thread is no pick.
       const isOpen =
         activeThread?.environmentId === thread.environmentId && activeThread.id === thread.id;
+      if (threadSearchQuery.trim().length > 0 && !threadSearchQuery.startsWith(">") && !isOpen) {
+        claimThreadOpen(thread.environmentId, thread.id, Date.now());
+      }
       if (
         threadSearchQuery.trim().length > 0 &&
         !threadSearchQuery.startsWith(">") &&
         thread.lastVisitedAt !== undefined &&
         !isOpen
       ) {
-        claimThreadOpen(thread.environmentId, thread.id, Date.now());
         void visitThread({
           environmentId: thread.environmentId,
           input: {

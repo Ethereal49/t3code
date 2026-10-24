@@ -19,6 +19,15 @@ export const indexedMessageCondition = (sql: SqlClient.SqlClient) => sql`
 `;
 
 /**
+ * What the index stores for a message: its text with curly apostrophes
+ * straight, as search folds a query, since iOS keyboards type "’" and others
+ * type "'". Migration 69's triggers use it too. `payload` is the message's
+ * JSON column.
+ */
+export const indexedMessageText = (sql: SqlClient.SqlClient, payload: string) =>
+  sql.literal(`replace(replace(json_extract(${payload}, '$.text'), '’', ''''), '‘', '''')`);
+
+/**
  * Refills the search index from the messages table. The index is keyed by
  * message rowid, so anything that may renumber or copy rows (VACUUM, a dev
  * database copy) rebuilds it instead of trusting it. Databases from before
@@ -37,7 +46,7 @@ export const rebuildMessageSearch = Effect.fn("MessageSearchIndex.rebuild")(func
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT messages.rowid, json_extract(messages.payload_json, '$.text')
+    SELECT messages.rowid, ${indexedMessageText(sql, "messages.payload_json")}
     FROM orchestration_v2_projection_messages AS messages
     WHERE ${indexedMessageCondition(sql)}
       AND json_extract(messages.payload_json, '$.text') IS NOT NULL

@@ -19,21 +19,24 @@ interface PendingFind {
   /** Where find starts, such as the message a palette result came from. */
   readonly start?: ThreadFindStart;
 }
-// A find a palette message result asked for, until that thread's view takes it.
-let pendingFind: (PendingFind & { readonly threadKey: string }) | null = null;
+// A find a palette message result asked for, until that thread's view takes
+// it. One the view never took (the navigation failed) lets go after a while,
+// so a later visit does not open an old find.
+const PENDING_FIND_MS = 30_000;
+let pendingFind: (PendingFind & { readonly threadKey: string; readonly at: number }) | null = null;
 
 /** Opens find on `query` in the thread's view, now or once it mounts. */
 export function requestThreadFindQuery(threadKey: string, find: PendingFind): void {
-  pendingFind = { threadKey, ...find };
+  pendingFind = { threadKey, at: Date.now(), ...find };
   window.dispatchEvent(new Event(THREAD_FIND_QUERY_EVENT));
 }
 
 /** The find waiting for this thread's view; answers once. */
 export function takeThreadFindQuery(threadKey: string): PendingFind | null {
   if (pendingFind?.threadKey !== threadKey) return null;
-  const find = pendingFind;
+  const { at, threadKey: _threadKey, ...find } = pendingFind;
   pendingFind = null;
-  return find;
+  return Date.now() - at < PENDING_FIND_MS ? find : null;
 }
 
 /**

@@ -473,8 +473,8 @@ export function CommandPalette(props: {
     if (messageId) requestThreadMessageJump(item.key, messageId);
     // A pick sends its open with the query, always, so the server records it;
     // the thread screen then skips its own open. The open thread is no pick.
+    if (thread && !item.secondary) claimThreadOpen(thread.environmentId, thread.id, Date.now());
     if (thread && thread.lastVisitedAt !== undefined && !item.secondary) {
-      claimThreadOpen(thread.environmentId, thread.id, Date.now());
       void visitThread({
         environmentId: thread.environmentId,
         input: {
@@ -625,6 +625,14 @@ export function CommandPalette(props: {
                   <Text className="p-5 text-center text-foreground-muted">
                     {search.isPending ? "Searching…" : "No results"}
                   </Text>
+                }
+                // Message results from slower environments may still arrive below.
+                ListFooterComponent={
+                  results.length > 0 && search.isPending && !query.startsWith(">") ? (
+                    <Text className="px-5 pt-2 text-xs text-foreground-muted">
+                      Searching messages…
+                    </Text>
+                  ) : undefined
                 }
                 renderItem={({ item, index }) => (
                   <>

@@ -443,6 +443,31 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("finds a curly apostrophe for a straight one and back", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:apostrophes");
+      const curly = ThreadId.make("thread:apostrophe-curly");
+      const straight = ThreadId.make("thread:apostrophe-straight");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(curly, project),
+          message(curly, "apostrophe-curly", "user", "the gannet\u2019s nest"),
+          thread(straight, project),
+          message(straight, "apostrophe-straight", "user", "a kittiwake's nest"),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const threadIds = (query: string) =>
+        search.search({ query }).pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+      assert.deepEqual(yield* threadIds("gannet's"), [curly]);
+      assert.deepEqual(yield* threadIds("kittiwake\u2019s"), [straight]);
+    }),
+  );
+
   it.effect("leaves out answers to an agent's question, which show in its card", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

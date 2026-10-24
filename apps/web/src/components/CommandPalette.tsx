@@ -1670,6 +1670,7 @@ function OpenCommandPaletteDialog(props: {
           })
         : allThreadItems,
     threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
+    messagesPending: !isLinkedThreadSearch && isThreadSearchPending,
     now: searchNow,
   });
 

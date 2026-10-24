@@ -424,10 +424,12 @@ function ThreadVisitWatermark(props: {
   // skips it.
   const recordedOpenRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!showContent || selectedThreadLastVisitedAt === undefined) return;
+    if (!showContent) return;
     if (recordedOpenRef.current === selectedThreadKey) return;
     recordedOpenRef.current = selectedThreadKey;
-    if (!claimThreadOpen(props.environmentId, selectedThreadId, Date.now())) return;
+    // Recorded here even when the server cannot take opens, so recents follow it.
+    const claimed = claimThreadOpen(props.environmentId, selectedThreadId, Date.now());
+    if (!claimed || selectedThreadLastVisitedAt === undefined) return;
     lastDispatchedVisitRef.current = `${selectedThreadKey}:${selectedThreadUpdatedAt}`;
     lastVisitDispatchRef.current = { threadKey: selectedThreadKey, at: Date.now() };
     void visitThread({
