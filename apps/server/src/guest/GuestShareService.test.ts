@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  GuestShareId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -119,8 +120,11 @@ it.effect("refuses guest requests once T3 Connect no longer serves the link's ho
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;
     const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { id: shareId } = (yield* Orchestrator.OrchestratorV2.use((orchestrator) =>
+      orchestrator.getThreadRecords(threadId, []),
+    )).thread.guestShare!;
     yield* Ref.set(hostname, null);
-    const submitted = yield* Effect.exit(guestShares.submit(session, { text: "Hello" }));
+    const submitted = yield* Effect.exit(guestShares.submit(session, { shareId, text: "Hello" }));
     assert.isTrue(Exit.isFailure(submitted));
   }).pipe(Effect.provide(layerTest)),
 );
@@ -139,5 +143,16 @@ it.effect("ends an open guest stream when T3 Connect stops serving the link's ho
       received.map((event) => event.type),
       ["snapshot", "ended"],
     );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("refuses a message a page sends for a share the cookie no longer opens", () =>
+  Effect.gen(function* () {
+    const { guestShares, credential } = yield* shareThread;
+    const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const submitted = yield* Effect.exit(
+      guestShares.submit(session, { shareId: GuestShareId.make("share:older"), text: "Hello" }),
+    );
+    assert.isTrue(Exit.isFailure(submitted));
   }).pipe(Effect.provide(layerTest)),
 );

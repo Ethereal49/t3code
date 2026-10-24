@@ -78,6 +78,7 @@ export function guestShareView(
   const share = thread.guestShare;
   if (!share || share.guestName === null) return null;
   return {
+    shareId: share.id,
     title: thread.title,
     guestName: share.guestName,
     expiresAt: share.expiresAt,

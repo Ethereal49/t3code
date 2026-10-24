@@ -1,5 +1,6 @@
 import {
   GuestMessageId,
+  GuestShareId,
   type GuestShareView,
   type GuestStreamEvent,
   type ThreadGuestMessage,
@@ -16,6 +17,7 @@ import {
 } from "./guestStream.logic";
 
 const view: GuestShareView = {
+  shareId: GuestShareId.make("share-1"),
   title: "Fix login",
   guestName: "Sam",
   expiresAt: "2026-10-24T00:00:00.000Z",
@@ -48,6 +50,15 @@ describe("applyGuestStreamEvent", () => {
       ended: false,
       awaitingRowIds: new Set(),
     });
+  });
+
+  it("ends when the shared cookie starts opening another link", () => {
+    const state = apply([
+      { type: "snapshot", view, items: [] },
+      { type: "snapshot", view: { ...view, shareId: GuestShareId.make("share-2") }, items: [] },
+    ]);
+    expect(state.ended).toBe(true);
+    expect(state.view?.shareId).toBe(view.shareId);
   });
 
   it("remembers a waiting message across a reconnect until its row arrives", () => {

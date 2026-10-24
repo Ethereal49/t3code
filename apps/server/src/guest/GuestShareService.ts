@@ -242,6 +242,12 @@ const make = Effect.gen(function* () {
     request: GuestSubmitRequest,
   ) {
     const { thread, share } = yield* authorize(session, "session");
+    if (request.shareId !== share.id) {
+      return yield* new GuestShareAccessError({
+        reason: "rejected",
+        message: "This page is for an older guest link. Reload it to continue.",
+      });
+    }
     yield* dispatchGuestCommand({
       type: "thread.guest-message.submit",
       commandId: yield* commandId("submit"),

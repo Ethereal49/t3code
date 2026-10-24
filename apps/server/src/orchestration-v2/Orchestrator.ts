@@ -11898,7 +11898,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         planned.events.length > 0 ||
         command.type === "thread.background-work.settle" ||
         command.type === "thread.stop" ||
-        command.type === "subagent.stop"
+        command.type === "subagent.stop" ||
+        // A second Stop sharing, or one after the share already ended, is not an error.
+        command.type === "thread.guest-share.close"
           ? Effect.succeed(planned)
           : Effect.fail(
               new OrchestratorDispatchError({

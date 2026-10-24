@@ -66,6 +66,10 @@ export function applyGuestStreamEvent(
 ): GuestStreamState {
   switch (event.type) {
     case "snapshot":
+      // Another tab redeemed a newer link, and the shared cookie now opens that thread.
+      if (state.view !== null && state.view.shareId !== event.view.shareId) {
+        return { ...state, ended: true };
+      }
       return {
         view: event.view,
         items: event.items,

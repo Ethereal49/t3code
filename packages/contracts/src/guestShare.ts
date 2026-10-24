@@ -79,6 +79,9 @@ export const GuestRedeemRequest = Schema.Struct({
 export type GuestRedeemRequest = typeof GuestRedeemRequest.Type;
 
 export const GuestSubmitRequest = Schema.Struct({
+  /** The share the page shows. One cookie serves every link on a host, so a newer link redeemed
+      in another tab must not receive this page's message. */
+  shareId: GuestShareId,
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_MESSAGE_MAX_LENGTH)),
 });
 export type GuestSubmitRequest = typeof GuestSubmitRequest.Type;
@@ -114,6 +117,7 @@ export const GuestTranscriptItem = Schema.Union([
 export type GuestTranscriptItem = typeof GuestTranscriptItem.Type;
 
 export const GuestShareView = Schema.Struct({
+  shareId: GuestShareId,
   title: Schema.String,
   guestName: TrimmedNonEmptyString,
   expiresAt: IsoDateTime,

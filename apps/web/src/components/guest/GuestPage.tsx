@@ -2,6 +2,7 @@ import {
   GUEST_MESSAGE_MAX_LENGTH,
   GUEST_NAME_MAX_LENGTH,
   GUEST_ROUTE_PREFIX,
+  GuestMessageId,
   type GuestRedeemRequest,
   type GuestShareView,
   type GuestSubmitRequest,
@@ -36,9 +37,36 @@ let capturedInvite: { readonly credential: string | null } | null = null;
  * once and removed from history, so it lives only in memory. Opening the page never redeems it:
  * only submitting a name does, so a reload before that leaves the link usable.
  */
+// A reload keeps the tab's session, so it keeps which messages still wait for a row too.
+const AWAITING_ROWS_KEY = "t3:guest-awaiting-rows";
+const AWAITING_ROWS_LIMIT = 50;
+
+function readAwaitingRowIds(): ReadonlySet<GuestMessageId> {
+  try {
+    const stored: unknown = JSON.parse(sessionStorage.getItem(AWAITING_ROWS_KEY) ?? "[]");
+    return new Set(
+      Array.isArray(stored)
+        ? stored.filter((id) => typeof id === "string").map((id) => GuestMessageId.make(id))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function writeAwaitingRowIds(ids: ReadonlySet<GuestMessageId>) {
+  try {
+    sessionStorage.setItem(AWAITING_ROWS_KEY, JSON.stringify([...ids].slice(-AWAITING_ROWS_LIMIT)));
+  } catch {}
+}
+
 function takeInviteCredential(): string | null {
   if (capturedInvite === null) {
-    const credential = decodeURIComponent(window.location.hash.slice(1)).trim();
+    // A malformed fragment is an invalid link, not a crash.
+    let credential = "";
+    try {
+      credential = decodeURIComponent(window.location.hash.slice(1)).trim();
+    } catch {}
     if (window.location.hash !== "") {
       window.history.replaceState(
         window.history.state,
@@ -102,7 +130,11 @@ export function GuestPage() {
 }
 
 function GuestSession() {
-  const [stream, dispatch] = useReducer(applyGuestStreamEvent, initialGuestStreamState);
+  const [stream, dispatch] = useReducer(applyGuestStreamEvent, null, () => ({
+    ...initialGuestStreamState,
+    awaitingRowIds: readAwaitingRowIds(),
+  }));
+  useEffect(() => writeAwaitingRowIds(stream.awaitingRowIds), [stream.awaitingRowIds]);
   // EventSource closes for good only on a non-200 response, which the guest routes send for a
   // missing, invalid, or ended session. Network drops reconnect on their own.
   const [rejected, setRejected] = useState(false);
@@ -201,7 +233,7 @@ function NameForm({
 }
 
 function GuestThread({
-  view: { title, working, expiresAt, messages },
+  view: { shareId, title, working, expiresAt, messages },
   items,
   awaitingRowIds,
 }: {
@@ -239,7 +271,7 @@ function GuestThread({
         </ol>
       </div>
       <div className={cn(LANE, "shrink-0 pb-4")}>
-        <GuestComposer />
+        <GuestComposer shareId={shareId} />
       </div>
     </>
   );
@@ -357,7 +389,7 @@ function GuestMarkdown({
   );
 }
 
-function GuestComposer() {
+function GuestComposer({ shareId }: { readonly shareId: GuestShareView["shareId"] }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -365,7 +397,7 @@ function GuestComposer() {
     const trimmed = text.trim();
     if (trimmed === "" || sending) return;
     setSending(true);
-    const failure = await postGuest("messages", { text: trimmed });
+    const failure = await postGuest("messages", { shareId, text: trimmed });
     setSending(false);
     setError(failure);
     // Keep anything typed while the request was in flight.
