@@ -488,10 +488,7 @@ function scorePaletteItem(
   now: number,
   options: { readonly typos: boolean },
 ) {
-  if (item.threadSearch) {
-    const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
-    return match && { ...match, ranges: match.titleRanges };
-  }
+  if (item.threadSearch) return scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
   // The title names the item; search terms are keywords. Ranges index the
   // first term, so they only highlight a title that is that term.
   const name = typeof item.title === "string" ? item.title : item.searchTitle;

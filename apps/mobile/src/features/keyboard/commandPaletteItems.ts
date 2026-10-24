@@ -61,10 +61,7 @@ export function filterCommandPaletteItems(
       options,
     ): (SearchTermsMatch & { explain?: () => SearchMatchHint | undefined }) | null => {
       const match = item.threadSearch
-        ? (() => {
-            const thread = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
-            return thread && { ...thread, ranges: thread.titleRanges };
-          })()
+        ? scoreThreadSearch(normalizedQuery, item.threadSearch, now, options)
         : scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
       // The open thread, listed last, does not decide where its group sits.
       return match && item.secondary ? { ...match, groupQuality: 0 } : match;

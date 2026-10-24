@@ -44,7 +44,7 @@ describe("scoreThreadSearch", () => {
 
   it("treats camelCase, kebab, path, and digit boundaries as word starts", () => {
     const starts = (title: string, query: string) =>
-      scoreThreadSearch(query, thread(title), NOW)?.titleRanges;
+      scoreThreadSearch(query, thread(title), NOW)?.ranges;
     expect(starts("useThreadSearch hook", "search")).toEqual([{ start: 9, end: 15 }]);
     expect(starts("fix/sidebar-perf", "perf")).toEqual([{ start: 12, end: 16 }]);
     expect(starts("Upgrade to pnpm12", "12")).toEqual([{ start: 15, end: 17 }]);
@@ -381,7 +381,7 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
     expect(rankTitles("fixsid", [thread("Feature: Fix sidebar lag")])).toEqual([
       "Feature: Fix sidebar lag",
     ]);
-    expect(scoreThreadSearch("fixsid", threads[0]!, NOW)?.titleRanges).toEqual([
+    expect(scoreThreadSearch("fixsid", threads[0]!, NOW)?.ranges).toEqual([
       { start: 0, end: 3 },
       { start: 4, end: 7 },
     ]);
@@ -568,8 +568,7 @@ describe("rankSearchGroups with keywords and picks", () => {
         ],
         (item, options) => {
           if (Array.isArray(item)) return scoreSearchTerms("mcp", item, options);
-          const match = scoreThreadSearch("mcp", item, NOW, options);
-          return match && { ...match, ranges: match.titleRanges };
+          return scoreThreadSearch("mcp", item, NOW, options);
         },
       ).map(({ group }) => group);
     const named = thread("Trim MCP model lists");

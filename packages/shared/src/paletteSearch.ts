@@ -853,7 +853,8 @@ export interface ThreadSearchMatch {
   readonly quality: number;
   /** Every token matched at a word start; see `rankSearchGroups`. */
   readonly strong: boolean;
-  readonly titleRanges: ReadonlyArray<SearchRange>;
+  /** Matched ranges in the title. */
+  readonly ranges: ReadonlyArray<SearchRange>;
   /**
    * Why the thread matched when its title shows no match, for the result row.
    * Built on demand, so only the rows shown pay for it.
@@ -988,7 +989,7 @@ export function scoreThreadSearch(
     // of that name: every new thread is titled "New thread" for a while.
     groupQuality: Math.min(match.quality, WHOLE_NAME - 0.01),
     strong: match.strong,
-    titleRanges: match.primaryRanges,
+    ranges: match.primaryRanges,
     ...(explain ? { explain } : {}),
     ...(pickedAt === undefined ? {} : { pickedAt }),
     ...(pick?.query === pickedQuery(normalizedQuery) ? { pickedExactly: true } : {}),
