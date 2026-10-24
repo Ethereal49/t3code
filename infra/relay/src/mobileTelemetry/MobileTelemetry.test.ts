@@ -47,6 +47,7 @@ interface Harness {
 
 const makeHarness = Effect.fnUntraced(function* (options: Harness = {}) {
   const sent: Array<HttpClientRequest.HttpClientRequest> = [];
+  const objectLookups: Array<string> = [];
   const objectReads: Array<string> = [];
   const execute =
     options.execute ??
@@ -63,6 +64,7 @@ const makeHarness = Effect.fnUntraced(function* (options: Harness = {}) {
     Effect.provideService(MobileTelemetry.SourceMapObjects, {
       get: (key) =>
         Effect.sync(() => {
+          objectLookups.push(key);
           const object = options.objects?.[key];
           if (object === undefined) return undefined;
           return typeof object === "string"
@@ -121,7 +123,7 @@ const makeHarness = Effect.fnUntraced(function* (options: Harness = {}) {
       );
       return yield* Deferred.await(response);
     });
-  return { sent, objectReads, send };
+  return { sent, objectLookups, objectReads, send };
 });
 
 const ingest = (signal: string, body: string, projectId = PROJECT_ID) =>
@@ -134,29 +136,27 @@ const ingest = (signal: string, body: string, projectId = PROJECT_ID) =>
 const sentText = (request: HttpClientRequest.HttpClientRequest) =>
   request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
 
-const exceptionLogs = (...stacks: ReadonlyArray<string>) =>
-  encodeJson({
-    resourceLogs: [
-      {
-        resource: {
-          attributes: [
-            { key: "os.type", value: { stringValue: "linux" } },
-            { key: "expo.app.update_id", value: { stringValue: UPDATE_ID } },
-          ],
-        },
-        scopeLogs: [
-          {
-            logRecords: stacks.map((stack) => ({
-              attributes: [
-                { key: "expo.error.source", value: { stringValue: "global" } },
-                { key: "exception.stacktrace", value: { stringValue: stack } },
-              ],
-            })),
-          },
-        ],
-      },
+const exceptionResourceLogs = (updateId: string, stacks: ReadonlyArray<string>) => ({
+  resource: {
+    attributes: [
+      { key: "os.type", value: { stringValue: "linux" } },
+      { key: "expo.app.update_id", value: { stringValue: updateId } },
     ],
-  });
+  },
+  scopeLogs: [
+    {
+      logRecords: stacks.map((stack) => ({
+        attributes: [
+          { key: "expo.error.source", value: { stringValue: "global" } },
+          { key: "exception.stacktrace", value: { stringValue: stack } },
+        ],
+      })),
+    },
+  ],
+});
+
+const exceptionLogs = (...stacks: ReadonlyArray<string>) =>
+  encodeJson({ resourceLogs: [exceptionResourceLogs(UPDATE_ID, stacks)] });
 
 const forwardedStack = (request: HttpClientRequest.HttpClientRequest) => {
   const payload = decodeJson(sentText(request)) as {
@@ -249,6 +249,42 @@ describe("MobileTelemetry", () => {
             .stringValue,
       );
       expect(statuses).toEqual(["symbolicated", "no_bundle_frames"]);
+    }),
+  );
+
+  it.effect("looks up at most two bundles' maps per request", () =>
+    Effect.gen(function* () {
+      const updateIds = ["update-1", "update-2", "update-3"];
+      const harness = yield* makeHarness({
+        objects: Object.fromEntries(updateIds.map((id) => [`android/ota/${id}.map`, SOURCE_MAP])),
+      });
+      const stack = "Error: x\n    at render (address at index.android.bundle:1:12)";
+      yield* harness.send(
+        ingest(
+          "logs",
+          encodeJson({ resourceLogs: updateIds.map((id) => exceptionResourceLogs(id, [stack])) }),
+        ),
+      );
+      expect(harness.objectLookups).toEqual([
+        "android/ota/update-1.map",
+        "android/ota/update-2.map",
+      ]);
+      const payload = decodeJson(sentText(harness.sent[0]!)) as {
+        resourceLogs: Array<{
+          scopeLogs: Array<{
+            logRecords: Array<{
+              attributes: Array<{ key: string; value: { stringValue: string } }>;
+            }>;
+          }>;
+        }>;
+      };
+      const statuses = payload.resourceLogs.map(
+        (resourceLogs) =>
+          resourceLogs.scopeLogs[0]!.logRecords[0]!.attributes.find(
+            ({ key }) => key === "relay.symbolication.status",
+          )?.value.stringValue,
+      );
+      expect(statuses).toEqual(["symbolicated", "symbolicated", "source_map_missing"]);
     }),
   );
 

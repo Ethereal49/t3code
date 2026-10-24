@@ -49,6 +49,11 @@ export const MAX_SOURCE_MAP_BYTES = 16 * 1024 * 1024;
  * thousands of frames, each rewritten to a longer source path.
  */
 const MAX_SYMBOLICATION_GROWTH = 1024 * 1024;
+/**
+ * One app sends a request, so it names one bundle, or two across an OTA
+ * update. Each further id would be an R2 read that evicts a cached map.
+ */
+const MAX_SOURCE_MAPS_PER_REQUEST = 2;
 /** A map can land in R2 a moment after its update ships, so a miss is retried. */
 const MISSING_SOURCE_MAP_TTL = Duration.minutes(5);
 const FAILED_SOURCE_MAP_TTL = Duration.seconds(30);
@@ -219,11 +224,13 @@ const make = Effect.gen(function* () {
     if (exceptions.length === 0) return undefined;
     let symbolicated = 0;
     let growthLeft = MAX_SYMBOLICATION_GROWTH;
+    const keys = new Set<string>();
     for (const exception of exceptions) {
       const key = bundleSourceMapKey(exception.identity);
+      if (key !== undefined && keys.size < MAX_SOURCE_MAPS_PER_REQUEST) keys.add(key);
       const outcome = applySymbolication(
         exception,
-        key === undefined ? undefined : yield* sourceMaps.find(key),
+        key === undefined || !keys.has(key) ? undefined : yield* sourceMaps.find(key),
         growthLeft,
       );
       growthLeft -= outcome.growth;
