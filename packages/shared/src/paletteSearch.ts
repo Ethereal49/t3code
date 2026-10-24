@@ -42,7 +42,13 @@ const fieldCache = new Map<string, SearchField>();
 const FIELD_CACHE_LIMIT = 100_000;
 
 function foldCharacter(character: string): string {
-  return character.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase().replace("ς", "σ");
+  // A typed straight apostrophe finds a curly one: iOS keyboards type "’".
+  return character
+    .normalize("NFKD")
+    .replace(COMBINING_MARKS, "")
+    .toLowerCase()
+    .replace("ς", "σ")
+    .replace("’", "'");
 }
 
 /**
@@ -256,17 +262,18 @@ function matchToken(
       let runEnd = index + 1;
       while (runEnd < field.text.length && ALPHANUMERIC.test(field.text[runEnd]!)) runEnd++;
       const word = field.text.slice(index, runEnd);
-      // Short tokens only forgive a swapped pair: any other edit of a three- or
-      // four-letter word matches too much ("cron" would find every "con…").
-      const swapOnly = token.length <= 4;
+      // Short tokens forgive a swapped pair or one missing letter ("srv" for
+      // "serv…"); any other edit of a three- or four-letter word matches too
+      // much ("cron" would find every "con…").
+      const short = token.length <= 4;
       // The same length first, so "githbu" highlights all of "GitHub".
-      const lengths = swapOnly
-        ? [token.length]
+      const lengths = short
+        ? [token.length, token.length + 1]
         : [token.length, token.length - 1, token.length + 1];
       for (const length of lengths) {
         if (length > word.length) continue;
         const prefix = word.slice(0, length);
-        if (withinOneEdit(token, prefix, swapOnly)) {
+        if (withinOneEdit(token, prefix, short && length === token.length)) {
           return { score: TYPO, start: index, end: index + length };
         }
       }

@@ -206,6 +206,14 @@ describe("scoreThreadSearch", () => {
     ).toEqual(["De-risk idle tunnel cleanup", "Typesafe App Builder"]);
     // "ing" is not "Nightly": a three-letter typo keeps the first letter.
     expect(rankTitles("ing", [thread("Nightly build fix")])).toEqual([]);
+    // A short word may miss one letter while it is typed, but not change one.
+    expect(rankTitles("srv", [thread("Server restart"), thread("Other")])).toEqual([
+      "Server restart",
+    ]);
+    expect(rankTitles("sidb", [thread("Fix sidebar lag")])).toEqual(["Fix sidebar lag"]);
+    expect(rankTitles("cron", [thread("Config cleanup")])).toEqual([]);
+    // A typed straight apostrophe finds a curly one.
+    expect(rankTitles("don't", [thread("Don’t merge yet")])).toEqual(["Don’t merge yet"]);
     // Typos count across camelCase joins.
     expect(rankTitles("githbu", [thread("GitHub API usage"), thread("Other")])).toEqual([
       "GitHub API usage",

@@ -11,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -426,6 +427,8 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
           .search({ query: "plover", limit: 1 })
           .pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
       assert.deepEqual(yield* threadIds(), [busy]);
+      // A pick at time 0 would read as no pick.
+      yield* TestClock.adjust("1 day");
       const at = DateTime.toEpochMillis(yield* DateTime.now);
       yield* sql`
         UPDATE orchestration_v2_projection_threads
@@ -658,6 +661,7 @@ it.effect("starts snippets a few words before the match so one line shows it", (
       ThreadSearch.buildSearchSnippet("Use **bold** and `code` here", 0),
       "Use bold and code here",
     );
+    assert.equal(ThreadSearch.buildSearchSnippet("Call __init__ first", 0), "Call __init__ first");
     // Short text still moves a late match into view.
     assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
   }),

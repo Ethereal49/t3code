@@ -662,12 +662,16 @@ export function HomeScreen(props: HomeScreenProps) {
             : null
         }
         environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
-        searchMatch={threadSearchMatchByKey.get(
-          threadSearchMatchKey({
-            environmentId: thread.environmentId,
-            threadId: thread.id,
-          }),
-        )}
+        searchMatch={
+          // Only rows listed for their messages show one and open at it.
+          threadListV2Layout.contentOnlyThreadKeys.has(
+            threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+          )
+            ? threadSearchMatchByKey.get(
+                threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+              )
+            : undefined
+        }
         searchQuery={threadSearch.query}
         onSelectThread={props.onSelectThread}
         onOpenThreadPullRequests={handleOpenThreadPullRequests}

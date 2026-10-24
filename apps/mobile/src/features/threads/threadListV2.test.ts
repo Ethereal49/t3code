@@ -1,3 +1,4 @@
+import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -148,6 +149,26 @@ describe("queued messages keep a settled thread active", () => {
       ["settled", "slim"],
     ]);
     expect(layout.settledCount).toBe(1);
+  });
+});
+
+describe("search keeps message matches apart from title matches", () => {
+  const matchKey = (id: string) =>
+    threadSearchMatchKey({ environmentId, threadId: ThreadId.make(id) });
+
+  it("marks only threads listed for their messages", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("titled"), title: "Fix sidebar lag" }),
+        makeThread({ id: ThreadId.make("mentioned"), title: "Weekly notes" }),
+      ],
+      environmentId: null,
+      searchQuery: "sidebar",
+      matchedThreadKeys: new Set([matchKey("titled"), matchKey("mentioned")]),
+      now: NOW,
+    });
+    expect(layout.items.map((item) => item.thread.id).toSorted()).toEqual(["mentioned", "titled"]);
+    expect([...layout.contentOnlyThreadKeys]).toEqual([matchKey("mentioned")]);
   });
 });
 

@@ -982,8 +982,8 @@ const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
 
 /**
  * Sidebar search results: title, branch, and pull request matches ranked as
- * the command palette ranks them, then threads whose messages match, in list
- * order.
+ * the command palette ranks them, then threads listed only because their
+ * messages match, in list order.
  */
 export function searchSidebarThreads<
   T extends ThreadSearchShell & {
@@ -995,9 +995,9 @@ export function searchSidebarThreads<
   query: string,
   contentMatchKeys: ReadonlySet<string> = EMPTY_CONTENT_MATCH_KEYS,
   now = Date.now(),
-): T[] {
+): { readonly titleMatches: T[]; readonly contentMatches: T[] } {
   const normalizedQuery = foldSearchQuery(query);
-  if (normalizedQuery.length === 0) return [];
+  if (normalizedQuery.length === 0) return { titleMatches: [], contentMatches: [] };
   const titleMatches = rankSearchItems(threads, (thread, options) =>
     scoreThreadSearch(normalizedQuery, threadSearchSubject(thread, null), now, {
       ...options,
@@ -1012,7 +1012,7 @@ export function searchSidebarThreads<
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
       ),
   );
-  return [...titleMatches, ...contentMatches];
+  return { titleMatches, contentMatches };
 }
 
 export function pullRequestMatchesSearchQuery(

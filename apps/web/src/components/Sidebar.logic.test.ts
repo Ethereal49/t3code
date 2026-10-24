@@ -349,7 +349,10 @@ describe("searchSidebarThreads", () => {
 
   it("ranks word matches by recent use, then lists message matches once", () => {
     expect(searchSidebarThreads(threads, "work", contentKeys("thread-1", "thread-2"), now)).toEqual(
-      [threads[0], threads[2], threads[3], threads[1]],
+      {
+        titleMatches: [threads[0], threads[2], threads[3]],
+        contentMatches: [threads[1]],
+      },
     );
   });
 });

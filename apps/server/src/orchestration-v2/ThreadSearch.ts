@@ -30,6 +30,18 @@ import {
 import { threadSearchPullRequests } from "@t3tools/shared/threadPullRequests";
 import { indexedMessageCondition } from "./messageSearchIndex.ts";
 
+// When the user last wrote in the thread aliased `threads`, as the clients
+// rank recency; agent notices in the user role do not count.
+const latestUserMessageAt = (sql: SqlClient.SqlClient) => sql`(
+  SELECT messages.updated_at
+  FROM orchestration_v2_projection_messages AS messages
+  WHERE messages.thread_id = threads.thread_id
+    AND messages.role = 'user'
+    AND COALESCE(json_extract(messages.payload_json, '$.createdBy'), 'user') = 'user'
+  ORDER BY messages.updated_at DESC, messages.message_id DESC
+  LIMIT 1
+)`;
+
 export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   "ThreadSearchError",
   {
@@ -61,7 +73,11 @@ const SearchRow = Schema.Struct({
   messageCreatedAt: Schema.NullOr(IsoDateTime),
 });
 
-const ThreadOpensRow = Schema.Struct({ threadId: ThreadId, opens: Schema.NullOr(Schema.String) });
+const ThreadOpensRow = Schema.Struct({
+  threadId: ThreadId,
+  opens: Schema.NullOr(Schema.String),
+  latestUserMessageAt: Schema.NullOr(IsoDateTime),
+});
 const decodeThreadOpens = Schema.decodeUnknownOption(
   Schema.fromJsonString(OrchestrationV2ThreadOpens),
 );
@@ -121,7 +137,7 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
   // Emphasis and code marks do not show in a thread either.
   const shown = text
     .slice(start, rawEnd)
-    .replace(/\*\*|__|`+/g, "")
+    .replace(/\*\*|`+/g, "")
     .replace(/\s+/g, " ")
     .trim();
   let end = Math.min(shown.length, SNIPPET_LENGTH - 2);
@@ -254,9 +270,12 @@ export const make = Effect.gen(function* () {
     Request: Schema.Struct({ threadIds: TokenList }),
     Result: ThreadOpensRow,
     execute: ({ threadIds }) => sql`
-      SELECT thread_id AS "threadId", json_extract(payload_json, '$.opens') AS opens
-      FROM orchestration_v2_projection_threads
-      WHERE thread_id IN (SELECT value FROM json_each(${threadIds}))
+      SELECT
+        threads.thread_id AS "threadId",
+        json_extract(threads.payload_json, '$.opens') AS opens,
+        ${latestUserMessageAt(sql)} AS "latestUserMessageAt"
+      FROM orchestration_v2_projection_threads AS threads
+      WHERE threads.thread_id IN (SELECT value FROM json_each(${threadIds}))
     `,
   });
 
@@ -267,15 +286,7 @@ export const make = Effect.gen(function* () {
       SELECT
         threads.payload_json AS thread,
         projects.title AS "projectTitle",
-        (
-          SELECT messages.updated_at
-          FROM orchestration_v2_projection_messages AS messages
-          WHERE messages.thread_id = threads.thread_id
-            AND messages.role = 'user'
-            AND COALESCE(json_extract(messages.payload_json, '$.createdBy'), 'user') = 'user'
-          ORDER BY messages.updated_at DESC, messages.message_id DESC
-          LIMIT 1
-        ) AS "latestUserMessageAt"
+        ${latestUserMessageAt(sql)} AS "latestUserMessageAt"
       FROM orchestration_v2_projection_threads AS threads
       INNER JOIN projection_projects AS projects
         ON projects.project_id = threads.project_id
@@ -356,8 +367,15 @@ export const make = Effect.gen(function* () {
     // a thread picked for this query must come back even when it only
     // matches in a few old messages.
     const opens = best.size === 0 ? [] : yield* read(threadOpens({ threadIds: [...best.keys()] }));
-    const opensById = new Map(
-      opens.map((row) => [row.threadId, Option.getOrNull(decodeThreadOpens(row.opens))]),
+    const subjectById = new Map(
+      opens.map((row) => [
+        row.threadId,
+        {
+          title: "",
+          activityAt: row.latestUserMessageAt === null ? null : Date.parse(row.latestUserMessageAt),
+          opens: Option.getOrNull(decodeThreadOpens(row.opens)),
+        },
+      ]),
     );
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const ranked = rankMessageMatches(
@@ -366,7 +384,7 @@ export const make = Effect.gen(function* () {
         hits: hitCount(hit.row.threadId),
         messageCreatedAt: hit.row.messageCreatedAt,
       })),
-      (hit) => ({ title: "", activityAt: null, opens: opensById.get(hit.row.threadId) ?? null }),
+      (hit) => subjectById.get(hit.row.threadId),
       foldSearchQuery(input.query),
       now,
     );
