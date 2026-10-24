@@ -425,6 +425,14 @@ const make = Effect.gen(function* () {
         userTurnLimit: SNAPSHOT_USER_TURN_LIMIT,
       })
       .pipe(Effect.mapError(() => inactive));
+    // The share can end between authorize and this read, as in `stream`.
+    if (
+      projection.thread.guestShare?.id !== share.id ||
+      projection.thread.archivedAt !== null ||
+      projection.thread.deletedAt !== null
+    ) {
+      return yield* inactive;
+    }
     const item = projection.visibleTurnItems.find(
       (entry) => entry.visibility === "local" && entry.item.id === itemId,
     )?.item;
