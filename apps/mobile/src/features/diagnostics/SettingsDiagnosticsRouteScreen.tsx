@@ -130,6 +130,8 @@ export function SettingsDiagnosticsRouteScreen() {
 
 function CrashReportsSetting() {
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  // One change at a time, so a failed save never rolls back a later choice.
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -147,12 +149,19 @@ function CrashReportsSetting() {
 
   const change = (value: boolean) => {
     setEnabled(value);
-    setCrashReportsEnabled(value);
-    savePreferencesPatch({ crashReportsEnabled: value }).catch((error: unknown) => {
-      console.warn("[diagnostics] could not save the crash report setting", error);
-      setEnabled(!value);
-      setCrashReportsEnabled(!value);
-    });
+    setSaving(true);
+    savePreferencesPatch({ crashReportsEnabled: value })
+      .then(
+        () => setCrashReportsEnabled(value),
+        (error: unknown) => {
+          console.warn("[diagnostics] could not save the crash report setting", error);
+          setEnabled(!value);
+        },
+      )
+      .catch((error: unknown) => {
+        console.warn("[diagnostics] could not apply the crash report setting", error);
+      })
+      .finally(() => setSaving(false));
   };
 
   return (
@@ -161,7 +170,7 @@ function CrashReportsSetting() {
         <SettingsSwitchRow
           icon="tray.and.arrow.up"
           label="Send crash reports"
-          disabled={enabled === null}
+          disabled={enabled === null || saving}
           value={enabled ?? true}
           onValueChange={change}
         />

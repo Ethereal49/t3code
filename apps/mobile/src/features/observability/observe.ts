@@ -14,16 +14,22 @@ const appVariant: unknown = Constants.expoConfig?.extra?.appVariant;
 /** Whether this build has anywhere to send crash reports. */
 export const crashReportingAvailable = typeof endpointUrl === "string";
 
-/** While sending is off, Observe drops reports rather than holding them for later. */
-export function setCrashReportsEnabled(enabled: boolean) {
+/**
+ * While sending is off, each dispatch pass drops the reports it finds. One
+ * recorded after the last pass would still go out once sending resumes, so a
+ * pass runs before sending is turned back on.
+ */
+export async function setCrashReportsEnabled(enabled: boolean) {
+  const dispatchingEnabled = crashReportingAvailable && enabled;
+  if (dispatchingEnabled) await Observe.dispatchEvents();
   Observe.configure({
-    dispatchingEnabled: crashReportingAvailable && enabled,
+    dispatchingEnabled,
     ...(typeof appVariant === "string" ? { environment: appVariant } : {}),
   });
 }
 
 if (!crashReportingAvailable) {
-  setCrashReportsEnabled(false);
+  void setCrashReportsEnabled(false);
 } else {
   // Observe keeps its last configuration across launches, so until the setting
   // loads the previous session's choice applies. Turning sending off in the
