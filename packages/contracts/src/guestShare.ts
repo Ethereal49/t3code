@@ -169,4 +169,11 @@ export const GuestStreamEvent = Schema.Union([
 export type GuestStreamEvent = typeof GuestStreamEvent.Type;
 
 export const GUEST_ROUTE_PREFIX = "/api/guest";
-export const GUEST_SESSION_COOKIE = "t3_guest";
+/** The guest page and guest routes name the share they mean with this query parameter. */
+export const GUEST_SHARE_PARAM = "share";
+
+/**
+ * One session cookie per share, so a guest keeps every link they joined on a host, and a page
+ * for one share never acts with another share's session.
+ */
+export const guestSessionCookieName = (shareId: string) => `t3_guest_${shareId}`;

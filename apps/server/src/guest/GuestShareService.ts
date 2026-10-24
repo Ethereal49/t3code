@@ -99,7 +99,14 @@ export class GuestShareService extends Context.Service<
       input: GuestShareCreateInput,
     ) => Effect.Effect<GuestShareCreateResult, GuestShareCreateError>;
     /** Spends an invite and returns the session token for the guest's cookie. */
-    readonly redeem: (request: GuestRedeemRequest) => Effect.Effect<string, GuestShareAccessError>;
+    readonly redeem: (
+      request: GuestRedeemRequest,
+    ) => Effect.Effect<
+      { readonly token: string; readonly shareId: GuestShareId },
+      GuestShareAccessError
+    >;
+    /** Succeeds while the session can still open its share. */
+    readonly check: (session: string) => Effect.Effect<void, GuestShareAccessError>;
     readonly submit: (
       session: string,
       request: GuestSubmitRequest,
@@ -225,7 +232,12 @@ const make = Effect.gen(function* () {
       shareId: share.id,
       guestName: request.name,
     });
-    return yield* sign({ kind: "session", threadId: thread.id, shareId: share.id });
+    const token = yield* sign({ kind: "session", threadId: thread.id, shareId: share.id });
+    return { token, shareId: share.id };
+  });
+
+  const check = Effect.fn("GuestShareService.check")(function* (session: string) {
+    yield* authorize(session, "session");
   });
 
   const submit = Effect.fn("GuestShareService.submit")(function* (
@@ -350,7 +362,7 @@ const make = Effect.gen(function* () {
     ).pipe(Stream.takeUntil((event) => event.type === "ended"));
   });
 
-  return GuestShareService.of({ create, redeem, submit, stream });
+  return GuestShareService.of({ create, redeem, check, submit, stream });
 });
 
 export const layer = Layer.effect(GuestShareService, make);

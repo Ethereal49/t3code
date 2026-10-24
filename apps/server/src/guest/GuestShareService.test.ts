@@ -95,9 +95,11 @@ const shareThread = Effect.gen(function* () {
 it.effect("spends an invite once and ends the guest stream when the owner stops sharing", () =>
   Effect.gen(function* () {
     const { orchestrator, guestShares, credential } = yield* shareThread;
-    const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
     const again = yield* Effect.exit(guestShares.redeem({ credential, name: "Eve" }));
     assert.isTrue(Exit.isFailure(again));
+    // The browser that joined can come back without the spent invite.
+    assert.isTrue(Exit.isSuccess(yield* Effect.exit(guestShares.check(session))));
     // An invite token is not a session token.
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.stream(credential))));
 
@@ -113,13 +115,14 @@ it.effect("spends an invite once and ends the guest stream when the owner stops 
       ["snapshot", "ended"],
     );
     assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.stream(session))));
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(guestShares.check(session))));
   }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("refuses guest requests once T3 Connect no longer serves the link's host", () =>
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;
-    const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
     const { id: shareId } = (yield* Orchestrator.OrchestratorV2.use((orchestrator) =>
       orchestrator.getThreadRecords(threadId, []),
     )).thread.guestShare!;
@@ -132,7 +135,7 @@ it.effect("refuses guest requests once T3 Connect no longer serves the link's ho
 it.effect("ends an open guest stream when T3 Connect stops serving the link's host", () =>
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;
-    const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
     const collecting = yield* Stream.runCollect(yield* guestShares.stream(session)).pipe(
       Effect.forkChild,
     );
@@ -149,7 +152,7 @@ it.effect("ends an open guest stream when T3 Connect stops serving the link's ho
 it.effect("refuses a message a page sends for a share the cookie no longer opens", () =>
   Effect.gen(function* () {
     const { guestShares, credential } = yield* shareThread;
-    const session = yield* guestShares.redeem({ credential, name: "Sam" });
+    const { token: session } = yield* guestShares.redeem({ credential, name: "Sam" });
     const submitted = yield* Effect.exit(
       guestShares.submit(session, { shareId: GuestShareId.make("share:older"), text: "Hello" }),
     );

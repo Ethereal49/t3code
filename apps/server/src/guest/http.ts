@@ -1,9 +1,10 @@
 import {
   GUEST_ROUTE_PREFIX,
-  GUEST_SESSION_COOKIE,
+  GUEST_SHARE_PARAM,
   GUEST_SHARE_TTL_MS,
   GuestRedeemRequest,
   GuestSubmitRequest,
+  guestSessionCookieName,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -35,9 +36,15 @@ const badRequest = HttpServerResponse.json(
   { status: 400, headers: NO_STORE },
 );
 
-const sessionToken = Effect.map(
-  HttpServerRequest.HttpServerRequest,
-  (request) => request.cookies[GUEST_SESSION_COOKIE] ?? "",
+const sessionFor = (request: HttpServerRequest.HttpServerRequest, shareId: string | null) =>
+  shareId === null ? "" : (request.cookies[guestSessionCookieName(shareId)] ?? "");
+
+/** The session for the share the request names in `?share=`. */
+const sessionToken = Effect.map(HttpServerRequest.HttpServerRequest, (request) =>
+  sessionFor(
+    request,
+    new URLSearchParams(request.url.split("?", 2)[1] ?? "").get(GUEST_SHARE_PARAM),
+  ),
 );
 
 const redeemRoute = HttpRouter.add(
@@ -49,9 +56,9 @@ const redeemRoute = HttpRouter.add(
     if (body._tag === "None") return yield* badRequest;
     const guestShares = yield* GuestShareService;
     return yield* guestShares.redeem(body.value).pipe(
-      Effect.flatMap((token) =>
+      Effect.flatMap(({ token, shareId }) =>
         HttpServerResponse.empty({ status: 204, headers: NO_STORE }).pipe(
-          HttpServerResponse.setCookie(GUEST_SESSION_COOKIE, token, {
+          HttpServerResponse.setCookie(guestSessionCookieName(shareId), token, {
             httpOnly: true,
             secure: true,
             sameSite: "strict",
@@ -73,7 +80,7 @@ const submitRoute = HttpRouter.add(
     const body = yield* request.json.pipe(Effect.flatMap(decodeSubmit), Effect.option);
     if (body._tag === "None") return yield* badRequest;
     const guestShares = yield* GuestShareService;
-    return yield* guestShares.submit(yield* sessionToken, body.value).pipe(
+    return yield* guestShares.submit(sessionFor(request, body.value.shareId), body.value).pipe(
       Effect.flatMap(() => Effect.succeed(HttpServerResponse.empty({ status: 204 }))),
       Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
@@ -103,4 +110,19 @@ const streamRoute = HttpRouter.add(
   }),
 );
 
-export const layer = Layer.mergeAll(redeemRoute, submitRoute, streamRoute);
+// Lets a returning guest skip the name form when this browser already joined the share.
+const sessionRoute = HttpRouter.add(
+  "GET",
+  `${GUEST_ROUTE_PREFIX}/session`,
+  Effect.gen(function* () {
+    const guestShares = yield* GuestShareService;
+    return yield* guestShares
+      .check(yield* sessionToken)
+      .pipe(
+        Effect.as(HttpServerResponse.empty({ status: 204, headers: NO_STORE })),
+        Effect.catchTags({ GuestShareAccessError: errorResponse }),
+      );
+  }),
+);
+
+export const layer = Layer.mergeAll(redeemRoute, sessionRoute, submitRoute, streamRoute);

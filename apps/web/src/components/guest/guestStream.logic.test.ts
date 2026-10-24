@@ -11,6 +11,7 @@ import {
   applyGuestStreamEvent,
   formatGuestExpiry,
   initialGuestStreamState,
+  inviteShareId,
   parseGuestStreamEvent,
   unplacedGuestMessages,
   type GuestStreamState,
@@ -172,5 +173,17 @@ describe("formatGuestExpiry", () => {
     expect(formatGuestExpiry("2026-10-23T23:59:00.000Z", now)).toBe("23h left");
     expect(formatGuestExpiry("2026-10-23T00:45:30.000Z", now)).toBe("45m left");
     expect(formatGuestExpiry("2026-10-23T00:00:00.000Z", now)).toBe("Expired");
+  });
+});
+
+describe("inviteShareId", () => {
+  it("reads the share from an invite's payload and rejects anything else", () => {
+    const payload = btoa(JSON.stringify({ kind: "invite", threadId: "t", shareId: "share-1" }))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replace(/=+$/, "");
+    expect(inviteShareId(`${payload}.signature`)).toBe("share-1");
+    expect(inviteShareId("not-base64!.sig")).toBeNull();
+    expect(inviteShareId("")).toBeNull();
   });
 });

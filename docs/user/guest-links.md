@@ -11,7 +11,8 @@ T3 Connect address. Your machine must stay online while the guest uses it.
 
 1. Right-click the thread in the sidebar and choose **Share with guest**. It is also in the thread
    menu and the command palette.
-2. Copy the link and send it to one person. It works once and expires after 24 hours.
+2. Copy the link and send it to one person. It works in one browser and expires after 24 hours.
+   Opening it again in that browser takes them back to the thread.
 3. When they send a message, it appears at the end of the thread and the sidebar shows **Request**.
    Choose **Send** to run it as a normal turn, or **Dismiss**.
 

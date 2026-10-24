@@ -2,6 +2,7 @@ import {
   GUEST_MESSAGE_MAX_LENGTH,
   GUEST_NAME_MAX_LENGTH,
   GUEST_ROUTE_PREFIX,
+  GUEST_SHARE_PARAM,
   GuestMessageId,
   type GuestRedeemRequest,
   type GuestShareView,
@@ -25,18 +26,20 @@ import {
   applyGuestStreamEvent,
   formatGuestExpiry,
   initialGuestStreamState,
+  inviteShareId,
   type GuestStreamState,
   parseGuestStreamEvent,
   unplacedGuestMessages,
 } from "./guestStream.logic";
 
-let capturedInvite: { readonly credential: string | null } | null = null;
+interface GuestEntry {
+  /** Unspent invite from the URL hash, if this load came from a link. */
+  readonly credential: string | null;
+  readonly shareId: string | null;
+}
 
-/**
- * The invite credential travels in the URL hash so it never reaches a server log. It is read
- * once and removed from history, so it lives only in memory. Opening the page never redeems it:
- * only submitting a name does, so a reload before that leaves the link usable.
- */
+let capturedEntry: GuestEntry | null = null;
+
 // A reload keeps the tab's session, so it keeps which messages still wait for a row too.
 const AWAITING_ROWS_KEY = "t3:guest-awaiting-rows";
 const AWAITING_ROWS_LIMIT = 50;
@@ -60,23 +63,33 @@ function writeAwaitingRowIds(ids: ReadonlySet<GuestMessageId>) {
   } catch {}
 }
 
-function takeInviteCredential(): string | null {
-  if (capturedInvite === null) {
+/**
+ * The invite credential travels in the URL hash so it never reaches a server log. It is read
+ * once and removed from history, so it lives only in memory. Opening the page never redeems it:
+ * only submitting a name does, so a reload before that leaves the link usable.
+ */
+function takeGuestEntry(): GuestEntry {
+  if (capturedEntry === null) {
     // A malformed fragment is an invalid link, not a crash.
     let credential = "";
     try {
       credential = decodeURIComponent(window.location.hash.slice(1)).trim();
     } catch {}
-    if (window.location.hash !== "") {
-      window.history.replaceState(
-        window.history.state,
-        "",
-        window.location.pathname + window.location.search,
-      );
-    }
-    capturedInvite = { credential: credential === "" ? null : credential };
+    const shareId =
+      credential !== ""
+        ? inviteShareId(credential)
+        : new URLSearchParams(window.location.search).get(GUEST_SHARE_PARAM);
+    // The share stays in the URL, so a reload or bookmark finds this browser's session for it.
+    window.history.replaceState(
+      window.history.state,
+      "",
+      shareId === null
+        ? window.location.pathname
+        : `${window.location.pathname}?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
+    );
+    capturedEntry = { credential: credential === "" ? null : credential, shareId };
   }
-  return capturedInvite.credential;
+  return capturedEntry;
 }
 
 const decodeErrorBody = Schema.decodeUnknownOption(Schema.Struct({ message: Schema.String }));
@@ -112,11 +125,30 @@ const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
 /** Same column as the owner's timeline, so both views wrap text at the same width. */
 const LANE = "chat-content-lane px-4";
 
+type GuestAccess = "checking" | "session" | "name" | "none";
+
 export function GuestPage() {
-  const [credential] = useState(takeInviteCredential);
-  // An invite always starts at the name form: a cookie from an earlier share on this host must
-  // not stand in for the thread this link points at.
-  const [joined, setJoined] = useState(false);
+  const [{ credential, shareId }] = useState(takeGuestEntry);
+  // A browser that already joined this share goes straight back in, even from the spent link.
+  // Sessions are per share, so one for another link never stands in for this one.
+  const [access, setAccess] = useState<GuestAccess>(shareId === null ? "none" : "checking");
+  useEffect(() => {
+    if (shareId === null) return;
+    let live = true;
+    void fetch(`${GUEST_ROUTE_PREFIX}/session?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`)
+      .then(
+        (response): GuestAccess =>
+          response.ok ? "session" : credential !== null ? "name" : "none",
+        // Offline: try the stream, which reports what it finds.
+        (): GuestAccess => "session",
+      )
+      .then((next) => {
+        if (live) setAccess(next);
+      });
+    return () => {
+      live = false;
+    };
+  }, [credential, shareId]);
   // Pasting another guest link into this tab changes only the hash, which does not reload the
   // page; reload so the new invite is read instead of the one already captured.
   useEffect(() => {
@@ -129,23 +161,30 @@ export function GuestPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
-      {credential !== null && !joined ? (
+      {access === "checking" ? (
+        <Notice title="Connecting..." />
+      ) : access === "name" && credential !== null ? (
         <NameForm
           credential={credential}
           onJoined={() => {
             // The invite is spent; a remount must open the session, not the name form again.
-            capturedInvite = { credential: null };
-            setJoined(true);
+            capturedEntry = { credential: null, shareId };
+            setAccess("session");
           }}
         />
+      ) : access === "session" && shareId !== null ? (
+        <GuestSession shareId={shareId} />
       ) : (
-        <GuestSession />
+        <Notice
+          title="This link has ended or is not valid"
+          detail="Ask the owner for a new link. Each link works in one browser."
+        />
       )}
     </div>
   );
 }
 
-function GuestSession() {
+function GuestSession({ shareId }: { readonly shareId: string }) {
   const [stream, dispatch] = useReducer(applyGuestStreamEvent, null, () => ({
     ...initialGuestStreamState,
     awaitingRowIds: readAwaitingRowIds(),
@@ -160,7 +199,9 @@ function GuestSession() {
   }, [stream.view]);
 
   useEffect(() => {
-    const source = new EventSource(`${GUEST_ROUTE_PREFIX}/stream`);
+    const source = new EventSource(
+      `${GUEST_ROUTE_PREFIX}/stream?${GUEST_SHARE_PARAM}=${encodeURIComponent(shareId)}`,
+    );
     source.addEventListener("message", (message) => {
       const event = parseGuestStreamEvent(message.data);
       if (event === null) return;
@@ -171,7 +212,7 @@ function GuestSession() {
       if (source.readyState === EventSource.CLOSED) setRejected(true);
     });
     return () => source.close();
-  }, []);
+  }, [shareId]);
 
   if (stream.ended || (rejected && stream.view !== null)) {
     return <Notice title="This link has ended" detail="The owner stopped sharing this thread." />;
