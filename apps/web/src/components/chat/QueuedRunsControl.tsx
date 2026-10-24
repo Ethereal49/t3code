@@ -127,6 +127,7 @@ export function QueuedRunsControl({
       text,
       // A guest's message keeps the guest's words; the owner can cancel it, not rewrite it.
       editable: context?.guest === undefined,
+      guestName: context?.guest?.name,
       attachments,
       thumbnails: attachments
         .filter((attachment) => attachment.type === "image")
@@ -144,6 +145,7 @@ export function QueuedRunsControl({
       serverIndex: null,
       text: message.text,
       editable: true,
+      guestName: undefined,
       attachments: [] as ReadonlyArray<ContractChatAttachment>,
       thumbnails: (message.attachments ?? [])
         .filter(isImageAttachment)
@@ -390,6 +392,9 @@ export function QueuedRunsControl({
                         ))}
                       </span>
                     ) : null}
+                    {item.guestName === undefined ? null : (
+                      <span className="shrink-0 text-guest-foreground">{item.guestName}</span>
+                    )}
                     <Tooltip>
                       <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
                         {previewText}

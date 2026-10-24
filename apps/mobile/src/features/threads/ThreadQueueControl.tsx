@@ -386,6 +386,11 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       }
                       numberOfLines={1}
                     >
+                      {context?.guest === undefined ? null : (
+                        <Text className="font-t3-medium text-adaptive-fuchsia-600-300">
+                          {`${context.guest.name}  `}
+                        </Text>
+                      )}
                       {title}
                     </Text>
                     {controls.isEditing ? (

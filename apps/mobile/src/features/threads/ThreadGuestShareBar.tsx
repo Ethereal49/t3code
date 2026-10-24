@@ -45,6 +45,12 @@ function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShar
   return useAtomValue(shareAtom);
 }
 
+/** True while a guest message waits for the owner; the feed shows it, so the thread is not empty. */
+export function useHasPendingGuestMessages(threadRef: ScopedThreadRef | null): boolean {
+  const share = useThreadGuestShare(threadRef);
+  return share?.messages.some((message) => message.status === "pending") ?? false;
+}
+
 function alertOnFailure(failureTitle: string, result: AtomCommandResult<unknown, unknown>) {
   if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
     const error = squashAtomCommandFailure(result);

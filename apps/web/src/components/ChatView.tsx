@@ -2953,7 +2953,10 @@ export default function ChatView(props: ChatViewProps) {
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
-  const pendingGuestMessageCount = serverThreadShell?.pendingGuestMessageCount ?? 0;
+  // Read from the projection the footer renders, so the scroll below sees the new message.
+  const pendingGuestMessageCount =
+    serverProjection?.thread.guestShare?.messages.filter((message) => message.status === "pending")
+      .length ?? 0;
   const previousPendingGuestMessagesRef = useRef({
     threadKey: routeThreadKey,
     count: pendingGuestMessageCount,
