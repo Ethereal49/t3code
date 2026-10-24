@@ -10,9 +10,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { loadPreferences, savePreferencesPatch } from "../../persistence/imperative";
+import { crashReportingAvailable, setCrashReportsEnabled } from "../observability/observe";
 import { SettingsActionRow } from "../settings/components/SettingsActionRow";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { SettingsSection } from "../settings/components/SettingsSection";
+import { SettingsSwitchRow } from "../settings/components/SettingsSwitchRow";
 import {
   formatStartupCrashReport,
   parseStartupCrashRecords,
@@ -78,6 +81,8 @@ export function SettingsDiagnosticsRouteScreen() {
         className="flex-1"
         contentContainerClassName="gap-6 px-5 pt-4 pb-[18px]"
       >
+        {crashReportingAvailable ? <CrashReportsSetting /> : null}
+
         <SettingsSection title="Startup crashes">
           {state.status === "loading" ? (
             <View className="items-center gap-3 px-6 py-8">
@@ -120,6 +125,53 @@ export function SettingsDiagnosticsRouteScreen() {
         </View>
       </ScrollView>
     </SettingsScreen>
+  );
+}
+
+function CrashReportsSetting() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadPreferences()
+      .then((preferences) => {
+        if (!cancelled) setEnabled(preferences.crashReportsEnabled !== false);
+      })
+      .catch((error: unknown) => {
+        console.warn("[diagnostics] could not read the crash report setting", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const change = (value: boolean) => {
+    setEnabled(value);
+    setCrashReportsEnabled(value);
+    savePreferencesPatch({ crashReportsEnabled: value }).catch((error: unknown) => {
+      console.warn("[diagnostics] could not save the crash report setting", error);
+      setEnabled(!value);
+      setCrashReportsEnabled(!value);
+    });
+  };
+
+  return (
+    <View className="gap-3">
+      <SettingsSection title="Crash reports">
+        <SettingsSwitchRow
+          icon="tray.and.arrow.up"
+          label="Send crash reports"
+          disabled={enabled === null}
+          value={enabled ?? true}
+          onValueChange={change}
+        />
+      </SettingsSection>
+      <Text className="px-2 text-sm leading-normal text-foreground-muted">
+        When the app crashes or hits an error, it sends the error message, the stack trace, the app
+        version, and the device model and OS version to the T3 Code team. Reports from while this is
+        off are never sent.
+      </Text>
+    </View>
   );
 }
 
