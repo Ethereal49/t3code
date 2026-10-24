@@ -8,7 +8,7 @@ import {
   rankSearchGroups,
   rankSearchItems,
   recordThreadOpen,
-  scoreMessageMatch,
+  messageMatcher,
   scoreSearchTerms,
   scoreThreadSearch,
   SEARCH_RECENCY_HALF_LIFE_MS,
@@ -17,6 +17,7 @@ import {
 } from "./paletteSearch.ts";
 
 const NOW = Date.UTC(2026, 9, 23);
+const scoreMessageMatch = (text: string, query: string) => messageMatcher(query)(text);
 const DAY = 24 * 60 * 60 * 1000;
 
 function thread(title: string, overrides: Partial<ThreadSearchSubject> = {}): ThreadSearchSubject {

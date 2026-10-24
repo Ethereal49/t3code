@@ -64,9 +64,7 @@ import {
 } from "./threadListV2";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
-import { scopedThreadKey } from "../../lib/scopedEntities";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
-import { requestThreadMessageJump } from "./threadMessageJump";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -604,14 +602,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const pinnedRow = props.pinned === true;
   const dormant = useSwipeRowDormant(props.activationKey);
 
-  // A row showing a message match opens the thread at that message.
-  const selectThread = () => {
-    const messageId = props.searchMatch?.messageId;
-    if (messageId) {
-      requestThreadMessageJump(scopedThreadKey(thread.environmentId, thread.id), messageId);
-    }
-    onSelectThread(thread);
-  };
+  const selectThread = () => onSelectThread(thread);
   const { providerDrivers, providerIconUrl } = useMemo(() => {
     const provider = props.providers?.find(
       (candidate) =>

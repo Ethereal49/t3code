@@ -23,7 +23,7 @@ import {
   foldSearchQuery,
   rankMessageMatches,
   rankSearchItems,
-  scoreMessageMatch,
+  messageMatcher,
   scoreThreadSearch,
   type ThreadSearchSubject,
 } from "@t3tools/shared/paletteSearch";
@@ -316,7 +316,7 @@ export const make = Effect.gen(function* () {
 
   // A project scope applies before ranking, so other projects' stronger hits
   // cannot use up the limit.
-  const searchMessages = Effect.fn("ThreadSearch.searchMessages")(function* (
+  const searchMessages = Effect.fn("ThreadSearch.search")(function* (
     input: OrchestrationSearchThreadsInput & {
       readonly projectId: ProjectId | null;
       /** Threads the caller already lists, which must not use up the limit. */
@@ -359,10 +359,11 @@ export const make = Effect.gen(function* () {
     // for "rust") never add to a whole word's count.
     const hitCounts = new Map<ThreadId, number>();
     const hitCount = (threadId: ThreadId) => hitCounts.get(threadId) ?? 1;
+    const matchMessage = messageMatcher(input.query);
     for (const row of rows) {
       if (input.excludedThreadIds?.has(row.threadId)) continue;
       const text = row.text.replace(MARKDOWN_LINK, "$1");
-      const match = scoreMessageMatch(text, input.query);
+      const match = matchMessage(text);
       if (match === null) continue;
       const hit = { row, text, ...match };
       const current = best.get(row.threadId);

@@ -1,7 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { indexedMessageText } from "../../orchestration-v2/messageSearchIndex.ts";
+import {
+  indexedMessageCondition,
+  indexedMessageText,
+} from "../../orchestration-v2/messageSearchIndex.ts";
 
 /**
  * Full-text index for thread message search. The trigram tokenizer matches any
@@ -47,11 +50,7 @@ export default Effect.gen(function* () {
   yield* sql`
     CREATE TRIGGER orchestration_v2_message_search_insert
     AFTER INSERT ON orchestration_v2_projection_messages
-    WHEN new.streaming = 0
-      AND (
-        new.role = 'assistant'
-        OR (new.role = 'user' AND COALESCE(json_extract(new.payload_json, '$.createdBy'), 'user') = 'user')
-      )
+    WHEN ${indexedMessageCondition(sql, "new")}
     BEGIN
       INSERT INTO orchestration_v2_message_search (rowid, text)
       SELECT new.rowid, ${indexedMessageText(sql, "new.payload_json")}
@@ -68,11 +67,7 @@ export default Effect.gen(function* () {
       DELETE FROM orchestration_v2_message_search WHERE rowid = old.rowid AND old.streaming = 0;
       INSERT INTO orchestration_v2_message_search (rowid, text)
       SELECT new.rowid, ${indexedMessageText(sql, "new.payload_json")}
-      WHERE new.streaming = 0
-        AND (
-          new.role = 'assistant'
-          OR (new.role = 'user' AND COALESCE(json_extract(new.payload_json, '$.createdBy'), 'user') = 'user')
-        )
+      WHERE ${indexedMessageCondition(sql, "new")}
         AND json_extract(new.payload_json, '$.text') IS NOT NULL;
     END
   `;
@@ -86,13 +81,9 @@ export default Effect.gen(function* () {
   `;
   yield* sql`
     INSERT INTO orchestration_v2_message_search (rowid, text)
-    SELECT rowid, ${indexedMessageText(sql, "payload_json")}
-    FROM orchestration_v2_projection_messages
-    WHERE streaming = 0
-      AND (
-        role = 'assistant'
-        OR (role = 'user' AND COALESCE(json_extract(payload_json, '$.createdBy'), 'user') = 'user')
-      )
-      AND json_extract(payload_json, '$.text') IS NOT NULL
+    SELECT messages.rowid, ${indexedMessageText(sql, "messages.payload_json")}
+    FROM orchestration_v2_projection_messages AS messages
+    WHERE ${indexedMessageCondition(sql)}
+      AND json_extract(messages.payload_json, '$.text') IS NOT NULL
   `;
 });

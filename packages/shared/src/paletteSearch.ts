@@ -475,27 +475,20 @@ export function messageSearchTokens(query: string): {
   };
 }
 
-// The server grades thousands of hits for one query, so its phrase is built once.
-let lastPhrase: { readonly query: string; readonly phrase: RegExp | null } | null = null;
-
 /**
  * Matches the query's words side by side as whole words, as typed, whatever
  * whitespace is between them and ignoring case; null for a single word.
  */
 export function messagePhrase(query: string): RegExp | null {
-  if (lastPhrase?.query === query) return lastPhrase.phrase;
   const { words } = messageSearchTokens(query);
-  const phrase =
-    words.length > 1
-      ? new RegExp(
-          `(?<![\\p{L}\\p{N}])${words
-            .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-            .join("\\s+")}(?![\\p{L}\\p{N}])`,
-          "iu",
-        )
-      : null;
-  lastPhrase = { query, phrase };
-  return phrase;
+  return words.length > 1
+    ? new RegExp(
+        `(?<![\\p{L}\\p{N}])${words
+          .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+          .join("\\s+")}(?![\\p{L}\\p{N}])`,
+        "iu",
+      )
+    : null;
 }
 
 // Words written together, as typed, rank above the same words apart, as in titles.
@@ -568,50 +561,53 @@ export interface MessageMatch {
 }
 
 /**
- * How a message matches a query, so message hits rank like titles, or null
+ * Grades messages against a query, so message hits rank like titles: null
  * when a token is missing or a short one never starts a word ("fts" in
- * "drafts"). Case and accents are ignored, as in the server's index.
+ * "drafts"). Case and accents are ignored, as in the server's index. The
+ * query is prepared once, since the server grades thousands of hits for it.
  */
-export function scoreMessageMatch(text: string, query: string): MessageMatch | null {
+export function messageMatcher(query: string): (text: string) => MessageMatch | null {
   const { long, short } = messageSearchTokens(query);
-  const lower = text.toLowerCase();
-  // "İ" lowercases to two units, which would shift every offset after it.
-  const plain = lower.length === text.length ? lower : foldInPlace(text);
-  let folded: string | null = null;
-  let quality = 1;
-  // The snippet shows the longest word, as the most telling: "sidebar", not
-  // "the", in "fix the sidebar".
-  let offset = text.length;
-  let offsetTokenLength = 0;
-  for (const token of [...long, ...short]) {
-    let found = findMessageToken(text, plain, token);
-    // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
-    // Marks go from the token: lowercasing "İ" adds one.
-    const foldedToken = foldInPlace(token).replace(COMBINING_MARKS, "");
-    if (
-      found?.quality !== 1 &&
-      foldedToken.length > 0 &&
-      (NON_ASCII.test(text) || NON_ASCII.test(token))
-    ) {
-      found = findMessageToken(text, (folded ??= foldInPlace(text)), foldedToken);
+  const tokens = [...long, ...short].map((token) => ({
+    token,
+    // Marks go from the folded token: lowercasing "İ" adds one.
+    folded: foldInPlace(token).replace(COMBINING_MARKS, ""),
+    nonAscii: NON_ASCII.test(token),
+    mustStartWord: Array.from(token).length < MESSAGE_WORD_START_LENGTH,
+  }));
+  const phrase = messagePhrase(query);
+  return (text) => {
+    const lower = text.toLowerCase();
+    // "İ" lowercases to two units, which would shift every offset after it.
+    const plain = lower.length === text.length ? lower : foldInPlace(text);
+    let folded: string | null = null;
+    let quality = 1;
+    // The snippet shows the longest word, as the most telling: "sidebar", not
+    // "the", in "fix the sidebar".
+    let offset = text.length;
+    let offsetTokenLength = 0;
+    for (const { token, folded: foldedToken, nonAscii, mustStartWord } of tokens) {
+      let found = findMessageToken(text, plain, token);
+      // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
+      if (found?.quality !== 1 && foldedToken.length > 0 && (nonAscii || NON_ASCII.test(text))) {
+        found = findMessageToken(text, (folded ??= foldInPlace(text)), foldedToken);
+      }
+      if (found === null) return null;
+      if (found.quality === MID_WORD && mustStartWord) return null;
+      quality = Math.min(quality, found.quality);
+      if (token.length > offsetTokenLength) {
+        offset = found.at;
+        offsetTokenLength = token.length;
+      }
     }
-    if (found === null) return null;
-    if (found.quality === MID_WORD && Array.from(token).length < MESSAGE_WORD_START_LENGTH) {
-      return null;
+    // Written together as typed: the snippet starts there.
+    const together = phrase?.exec(plain);
+    if (together) {
+      offset = together.index;
+      quality += MESSAGE_PHRASE_BONUS;
     }
-    quality = Math.min(quality, found.quality);
-    if (token.length > offsetTokenLength) {
-      offset = found.at;
-      offsetTokenLength = token.length;
-    }
-  }
-  // Written together as typed: the snippet starts there.
-  const together = messagePhrase(query)?.exec(plain);
-  if (together) {
-    offset = together.index;
-    quality += MESSAGE_PHRASE_BONUS;
-  }
-  return { quality, offset };
+    return { quality, offset };
+  };
 }
 
 /**

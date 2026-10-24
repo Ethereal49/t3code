@@ -2,21 +2,23 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
 /**
- * The messages that migration 69's triggers index for search, for queries
- * that must agree with it: finished, and either written by the user or
+ * The messages search indexes: finished, and either written by the user or
  * answered by an agent. User-role notices that agents or the system wrote
- * stay out. Expects the messages table aliased as `messages`.
+ * stay out. Migration 69's triggers, its backfill, the rebuild, and the scan
+ * all use it; `row` names the message row (a table alias, or `new` in a
+ * trigger).
  */
-export const indexedMessageCondition = (sql: SqlClient.SqlClient) => sql`
-  messages.streaming = 0
+export const indexedMessageCondition = (sql: SqlClient.SqlClient, row = "messages") =>
+  sql.literal(`
+  ${row}.streaming = 0
   AND (
-    messages.role = 'assistant'
+    ${row}.role = 'assistant'
     OR (
-      messages.role = 'user'
-      AND COALESCE(json_extract(messages.payload_json, '$.createdBy'), 'user') = 'user'
+      ${row}.role = 'user'
+      AND COALESCE(json_extract(${row}.payload_json, '$.createdBy'), 'user') = 'user'
     )
   )
-`;
+`);
 
 /**
  * What the index stores for a message: its text with curly apostrophes
