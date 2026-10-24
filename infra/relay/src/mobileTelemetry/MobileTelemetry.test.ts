@@ -4,9 +4,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { RelayApi } from "@t3tools/contracts/relay";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as Etag from "effect/http/Etag";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
@@ -349,6 +351,16 @@ describe("MobileTelemetry", () => {
       });
       const response = yield* harness.send(ingest("logs", "{}"));
       expect(response.status).toBe(502);
+    }),
+  );
+
+  it.effect("answers upstream_timeout before the relay's request deadline cuts it off", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ execute: () => Effect.never });
+      const fiber = yield* harness.send(ingest("logs", "{}")).pipe(Effect.forkChild);
+      yield* TestClock.adjust(RelayHttpApi.RELAY_REQUEST_DEADLINE_MS - 1);
+      const response = yield* Fiber.join(fiber);
+      expect(response.status).toBe(504);
     }),
   );
 

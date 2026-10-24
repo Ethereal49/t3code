@@ -30,7 +30,12 @@ import { decodeSourceMap, type CompactSourceMap } from "./sourceMap.ts";
 export const MOBILE_TELEMETRY_MAX_BODY_BYTES = 2 * 1024 * 1024;
 /** Per client IP. An app flushes a few batches per launch and background. */
 export const MOBILE_TELEMETRY_RATE_LIMIT = { limit: 120, periodSeconds: 60 } as const;
-const UPSTREAM_TIMEOUT = Duration.seconds(10);
+/**
+ * Inside the relay's 9 s request deadline (`RELAY_REQUEST_DEADLINE_MS`), with
+ * room left for reading the body and symbolicating, so a slow Axiom answers as
+ * `upstream_timeout` rather than the generic deadline error.
+ */
+const UPSTREAM_TIMEOUT = Duration.seconds(7);
 const MAX_UPSTREAM_RESPONSE_BYTES = 64 * 1024;
 /**
  * A decoded production Hermes map is about 20 MB and `decodeSourceMap` refuses
