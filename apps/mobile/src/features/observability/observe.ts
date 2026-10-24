@@ -40,15 +40,20 @@ if (!crashReportingAvailable) {
   // loads the previous session's choice applies. Turning sending off in the
   // meantime would drop reports, including the last session's native crash.
   // Loaded after startup: the persistence runtime's module graph must not run
-  // ahead of the imports `index.ts` orders first.
+  // ahead of the imports `index.ts` orders first. A change made in Settings
+  // while it loads is newer than what it read.
+  const changedSinceLoad = () => latestConfiguration !== 0;
   void import("../../persistence/imperative")
     .then(({ loadPreferences }) => loadPreferences())
     .then(
-      (preferences) => setCrashReportsEnabled(preferences.crashReportsEnabled !== false),
+      (preferences) =>
+        changedSinceLoad()
+          ? undefined
+          : setCrashReportsEnabled(preferences.crashReportsEnabled !== false),
       (error: unknown) => {
-        // The choice is unknown, so this session does not send.
         console.warn("[observe] could not read the crash report setting", error);
-        return setCrashReportsEnabled(false);
+        // The choice is unknown, so this session does not send.
+        return changedSinceLoad() ? undefined : setCrashReportsEnabled(false);
       },
     )
     .catch((error: unknown) => {
