@@ -1004,7 +1004,6 @@ export function scoreThreadSearch(
           ? { label: "ID or link", text: normalizedQuery, ranges: [] }
           : (checkedHint ?? matchHint(fieldQuery, thread, typos));
   const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
-  const pickedAt = pick?.at;
   return {
     score: match.quality * threadUsageBoost(thread, now),
     quality: match.quality,
@@ -1014,7 +1013,7 @@ export function scoreThreadSearch(
     strong: match.strong,
     ranges: match.primaryRanges,
     ...(explain ? { explain } : {}),
-    ...(pickedAt === undefined ? {} : { pickedAt }),
+    ...(pick ? { pickedAt: pick.at } : {}),
     ...(pick?.query === pickedQuery(normalizedQuery) ? { pickedExactly: true } : {}),
   };
 }
@@ -1035,8 +1034,8 @@ function messageMatchWeight(hits: number): number {
 
 /**
  * Orders message matches from the server, from any number of environments:
- * by match quality (whole words, then word prefixes, then inside words), then
- * threads picked for the query, then hit count times use, then the newest
+ * word matches before matches inside words, then threads picked for the
+ * query, then match quality, then hit count times use, then the newest
  * message. With `withoutTitleMatches`, threads that match by title are left
  * out: a palette lists them above, so they must not use up message rows.
  */
