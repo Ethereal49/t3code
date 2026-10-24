@@ -244,6 +244,26 @@ describe("queries that fold to empty words", () => {
 });
 
 describe("scoreThreadSearch beyond Latin text and titles", () => {
+  it("leaves out a row whose words only meet across unrelated fields", () => {
+    const scattered = thread("eMudhra certificate update request", {
+      pullRequests: [
+        { number: 22645, title: "fix model picker" },
+        { number: 22649, title: "CI speedups" },
+      ],
+    });
+    expect(scoreThreadSearch("fix ci", scattered, NOW)).toBeNull();
+    // The project explains its own words; one field explains the rest.
+    const lakebed = thread("Weekly notes", {
+      projectTitle: "lakebed",
+      pullRequests: [{ number: 243, title: "perf: faster cold starts" }],
+    });
+    expect(scoreThreadSearch("lakebed perf", lakebed, NOW)?.explain?.()).toEqual({
+      label: "PR",
+      text: "#243 perf: faster cold starts",
+      ranges: [{ start: 5, end: 9 }],
+    });
+  });
+
   it("says which field matched when the title does not", () => {
     const subject = thread("Trim model lists", {
       branch: "t3/cleanup-payloads",
@@ -401,7 +421,7 @@ describe("scoreThreadSearch with heavy use and loose input", () => {
 });
 
 describe("rankMessageMatches", () => {
-  it("merges environments by match quality, then picks, then use", () => {
+  it("merges environments by word match, then picks, then quality and use", () => {
     const subjects = new Map([
       ["a-word", thread("A word")],
       ["a-word-2", thread("A word too")],
@@ -426,7 +446,7 @@ describe("rankMessageMatches", () => {
       rankMessageMatches(matches, (match) => subjects.get(match.key), "needle", NOW).map(
         (match) => match.key,
       ),
-    ).toEqual(["b-recent", "a-word", "a-word-2", "b-picked", "b-prefix"]);
+    ).toEqual(["b-picked", "b-recent", "a-word", "a-word-2", "b-prefix"]);
     // A palette lists title matches above, so they use up no message rows.
     const titled = new Map([...subjects, ["c-titled", thread("Needle cleanup")]]);
     expect(
@@ -522,9 +542,11 @@ describe("rankSearchGroups with keywords and picks", () => {
     expect(groups.map(({ group }) => group)).toEqual(["settings"]);
     expect(scoreSearchTerms("duckdb", ["Search engine", "duckduckgo"], { typos: true })).toBeNull();
     expect(scoreSearchTerms("rust", ["GitHub sharing", "trusted"])).toBeNull();
+    // Filler words do not make a short query long enough for keyword prefixes.
+    expect(scoreSearchTerms("the ci", ["Context window indicator", "circle"])).toBeNull();
   });
 
-  it("lists a thread named for the query above a command with it as a keyword, and picks first", () => {
+  it("lists a thread named for the query above a command with it as a keyword", () => {
     const rank = (command: string[], subject: ThreadSearchSubject) =>
       rankSearchGroups<string, string[] | ThreadSearchSubject, SearchTermsMatch>(
         [
@@ -542,19 +564,10 @@ describe("rankSearchGroups with keywords and picks", () => {
       opens: { openedAt: NOW, score: 1, picks: [{ query: "mcp", at: NOW }] },
     });
     expect(rank(["Restart agent session", "reload", "mcp"], named)).toEqual(["threads", "actions"]);
-    // A command named for the query stays first, unless the thread was picked for it.
+    // A command named for the query stays first; a pick reorders threads but
+    // never moves their group, so one pick for "mcp" does not pass the command.
     expect(rank(["Reload MCP servers"], named)).toEqual(["actions", "threads"]);
-    expect(rank(["Reload MCP servers"], picked)).toEqual(["threads", "actions"]);
-    // A pick for a longer query keeps its row first among threads, but the
-    // groups hold still while the word is typed.
-    const pickedLonger = thread("Trim MCP model lists", {
-      opens: { openedAt: NOW, score: 1, picks: [{ query: "mcpx", at: NOW }] },
-    });
-    expect(rank(["Reload MCP servers"], pickedLonger)).toEqual(["actions", "threads"]);
-    const oldPick = thread("Trim MCP model lists", {
-      opens: { openedAt: NOW, score: 1, picks: [{ query: "mcp", at: NOW - 60 * DAY }] },
-    });
-    expect(rank(["Reload MCP servers"], oldPick)).toEqual(["actions", "threads"]);
+    expect(rank(["Reload MCP servers"], picked)).toEqual(["actions", "threads"]);
   });
 });
 
@@ -644,6 +657,7 @@ describe("scoreMessageMatch", () => {
       offset: together.indexOf("vp run dev"),
     });
     expect(scoreMessageMatch("dev notes: vp is slow, run it", "vp run dev")?.quality).toBe(1);
+    expect(scoreMessageMatch("I don\u2019t know why", "don't know")?.quality).toBe(1.25);
     // The snippet shows the longest word, not an early filler word.
     const phrase = "Yes. Since the last fix, the sidebar works";
     expect(scoreMessageMatch(phrase, "fix the sidebar")?.offset).toBe(phrase.indexOf("sidebar"));

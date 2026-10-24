@@ -1670,7 +1670,6 @@ function OpenCommandPaletteDialog(props: {
           })
         : allThreadItems,
     threadMessageItems: isLinkedThreadSearch ? [] : threadMessageItems,
-    messagesPending: !isLinkedThreadSearch && isThreadSearchPending,
     now: searchNow,
   });
 
@@ -2659,6 +2658,10 @@ function OpenCommandPaletteDialog(props: {
     >
       {`Open in ${fileManagerName}`}
     </CommandFooterAction>
+  ) : isThreadSearchPending && !isLinkedThreadSearch && !isBrowsing ? (
+    // In the footer, so the list keeps its height while message results may
+    // still arrive below it.
+    <span className="text-muted-foreground text-xs">Searching messages…</span>
   ) : null;
 
   return (

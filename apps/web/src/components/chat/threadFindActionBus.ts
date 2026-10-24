@@ -54,8 +54,14 @@ export function findForMessageMatch(
   query: string,
 ): PendingFind {
   const start = match.messageId ? { start: { entryId: match.messageId, occurrence: 0 } } : {};
-  const together = messagePhrase(query)?.exec(match.snippet);
-  if (together) return { query: together[0], ...start };
+  // Apostrophes are straight in the query; straightening keeps offsets.
+  const together = messagePhrase(query)?.exec(match.snippet.replace(/[\u2018\u2019]/g, "'"));
+  if (together) {
+    return {
+      query: match.snippet.slice(together.index, together.index + together[0].length),
+      ...start,
+    };
+  }
   const word =
     messageSearchTokens(query).long.reduce(
       (longest, token) => (token.length > longest.length ? token : longest),

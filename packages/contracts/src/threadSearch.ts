@@ -34,7 +34,8 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   messageCreatedAt: Schema.NullOr(IsoDateTime),
   /**
    * How well the message matches: 1 for whole words, 0.8 when a word only
-   * starts one, 0.3 when one only appears inside words. Older servers omit it.
+   * starts one, 0.3 when one only appears inside words, 0.25 more when the
+   * words are written together as typed. Older servers omit it.
    */
   quality: Schema.optionalKey(Schema.Finite),
   /** How many of the thread's newest messages match. Older servers omit it. */

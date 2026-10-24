@@ -476,6 +476,18 @@ function rankPaletteItem(
   readonly pickedAt?: number;
   readonly pickedExactly?: boolean;
 } | null {
+  const match = scorePaletteItem(item, normalizedQuery, now, options);
+  // A row listed last in its group (a keybinding setting, the open thread)
+  // does not decide where the group sits.
+  return match && item.secondary ? { ...match, groupQuality: 0 } : match;
+}
+
+function scorePaletteItem(
+  item: PaletteItem,
+  normalizedQuery: string,
+  now: number,
+  options: { readonly typos: boolean },
+) {
   if (item.threadSearch) {
     const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
     return match && { ...match, ranges: match.titleRanges };
@@ -507,8 +519,6 @@ export function filterCommandPaletteGroups(input: {
   threadSearchItems: ReadonlyArray<CommandPaletteActionItem>;
   /** Threads whose messages match, best first; threads already listed are skipped. */
   threadMessageItems?: ReadonlyArray<CommandPaletteActionItem>;
-  /** Message search is still running, so more message results may arrive. */
-  messagesPending?: boolean;
   now?: number;
 }): CommandPaletteGroup[] {
   const isActionsFilter = input.query.startsWith(">");
@@ -580,6 +590,7 @@ export function filterCommandPaletteGroups(input: {
       .slice(0, limit)
       .map(({ item, match }) => {
         if (match.ranges.length > 0) return { ...item, titleRanges: match.ranges };
+        // Built only for the rows shown.
         const matchHint = match.explain?.();
         return matchHint ? { ...item, matchHint } : item;
       });
@@ -590,19 +601,6 @@ export function filterCommandPaletteGroups(input: {
   const listed = new Set(groups.flatMap((group) => group.items.map((item) => item.value)));
   // The items arrive cut to what the palette shows; see `nextShownOrder`.
   const messageItems = (input.threadMessageItems ?? []).filter((item) => !listed.has(item.value));
-  // A static last row, so a list that looks finished is not taken for one
-  // while a slower environment still answers.
-  if (input.messagesPending) {
-    messageItems.push({
-      kind: "action",
-      value: "threads-messages:pending",
-      searchTerms: [],
-      title: "Searching messages…",
-      icon: null,
-      disabled: true,
-      run: async () => undefined,
-    });
-  }
   return messageItems.length === 0
     ? groups
     : [...groups, { value: "threads-messages", label: "In messages", items: messageItems }];

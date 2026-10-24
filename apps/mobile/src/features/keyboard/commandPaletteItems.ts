@@ -60,11 +60,14 @@ export function filterCommandPaletteItems(
       item,
       options,
     ): (SearchTermsMatch & { explain?: () => SearchMatchHint | undefined }) | null => {
-      if (!item.threadSearch) {
-        return scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
-      }
-      const match = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
-      return match && { ...match, ranges: match.titleRanges };
+      const match = item.threadSearch
+        ? (() => {
+            const thread = scoreThreadSearch(normalizedQuery, item.threadSearch, now, options);
+            return thread && { ...thread, ranges: thread.titleRanges };
+          })()
+        : scoreSearchTerms(normalizedQuery, [item.title, ...item.searchTerms], options);
+      // The open thread, listed last, does not decide where its group sits.
+      return match && item.secondary ? { ...match, groupQuality: 0 } : match;
     },
   );
   const threadsMatch = groups.some(({ group }) => group === "thread");

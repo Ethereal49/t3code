@@ -21,6 +21,7 @@ const COMBINING_MARKS = /\p{M}/gu;
 // Emoji and other symbols can be searched for, so they start words too.
 const SYMBOL = /\p{So}/u;
 const APOSTROPHE = /['’]/;
+const CURLY_APOSTROPHES = /[\u2018\u2019]/g;
 
 interface SearchField {
   /** Case- and accent-folded text, one UTF-16 unit per source unit. */
@@ -459,7 +460,7 @@ export function messageSearchTokens(query: string): {
   const tokens = query
     .replace(WRAPPING_QUOTES, "")
     // The index stores apostrophes straight, as `indexedMessageText` writes them.
-    .replace(/[‘’]/g, "'")
+    .replace(CURLY_APOSTROPHES, "'")
     .normalize("NFC")
     .toLowerCase()
     .split(/\s+/)
@@ -600,8 +601,9 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
         offsetTokenLength = token.length;
       }
     }
-    // Written together as typed: the snippet starts there.
-    const together = phrase?.exec(plain);
+    // Written together as typed: the snippet starts there. Apostrophes are
+    // straight in the query, and straightening keeps offsets.
+    const together = phrase?.exec(plain.replace(CURLY_APOSTROPHES, "'"));
     if (together) {
       offset = together.index;
       quality += MESSAGE_PHRASE_BONUS;
@@ -790,13 +792,14 @@ function matchReference(
 }
 
 // How long a pick lasts. While it does, typing the query again (or the start of
-// it) puts the thread first in its group, the latest pick first. The exact
-// query also lifts its group above commands that match as well; a prefix does
-// not, so the groups hold still while a word is typed. It runs from the pick,
-// so an old pick lets go even if the thread is opened in other ways.
+// it) puts the thread first among its group's word matches, the exact query's
+// pick and then the latest first. A pick never moves the group itself, so a
+// thread picked once for "new" does not pass the command of that name. It runs
+// from the pick, so an old pick lets go even if the thread is opened in other
+// ways.
 const PICK_WINDOW_MS = 21 * DAY_MS;
 // The start of a picked query counts from three letters: "n" is too little to
-// go on, and would flip the group order between keystrokes.
+// go on.
 const PICK_PREFIX_MIN_LENGTH = 3;
 
 /** The latest pick of the thread for this query, while it lasts. */
@@ -835,7 +838,7 @@ export interface ThreadSearchMatch {
   readonly explain?: () => SearchMatchHint | undefined;
   /** When the thread was picked for this query, while that pick lasts; see `rankSearchGroups`. */
   readonly pickedAt?: number;
-  /** Picked for exactly this query, which also lifts its group; see `rankSearchGroups`. */
+  /** Picked for exactly this query, before newer picks for longer ones; see `rankSearchGroups`. */
   readonly pickedExactly?: boolean;
   /** Below the whole-name class; see `scoreThreadSearch`. */
   readonly groupQuality: number;
@@ -856,7 +859,12 @@ function searchableBranch(branch: string | null | undefined): string | null {
   return branch ? branch.replace(WORKTREE_BRANCH_PREFIX_PATTERN, "") : null;
 }
 
-/** The first non-title field that holds the whole query, to explain the match. */
+/**
+ * The field that explains a match whose title shows none: the first that holds
+ * the whole query, else, past the words the project or environment holds, the
+ * first that holds the rest ("lakebed perf" in project "lakebed" with the PR
+ * title "perf: …").
+ */
 function matchHint(
   normalizedQuery: string,
   thread: ThreadSearchSubject,
@@ -871,13 +879,25 @@ function matchHint(
     { label: "Project", text: thread.projectTitle },
     { label: "Environment", text: thread.environmentLabel },
   ];
-  for (const { label, text } of candidates) {
-    const ranges = text
-      ? matchSearchFields(normalizedQuery, [{ value: text, weight: 1 }], { typos })?.primaryRanges
-      : undefined;
-    if (text && ranges) return { label, text, ranges };
-  }
-  return undefined;
+  const holds = (text: string, query: string) =>
+    matchSearchFields(query, [{ value: text, weight: 1 }], { typos })?.primaryRanges;
+  const hintFor = (query: string) => {
+    for (const { label, text } of candidates) {
+      const ranges = text ? holds(text, query) : undefined;
+      if (text && ranges) return { label, text, ranges };
+    }
+    return undefined;
+  };
+  const whole = hintFor(normalizedQuery);
+  if (whole) return whole;
+  const contexts = [thread.projectTitle, thread.environmentLabel].filter(
+    (text): text is string => !!text,
+  );
+  const rest = normalizedQuery
+    .split(" ")
+    .filter((token) => !contexts.some((text) => holds(text, token)))
+    .join(" ");
+  return rest && rest !== normalizedQuery ? hintFor(rest) : undefined;
 }
 
 /**
@@ -921,15 +941,23 @@ export function scoreThreadSearch(
   const referenceMatch = fieldMatch ? null : matchReference(normalizedQuery, thread);
   const match = fieldMatch ?? referenceMatch;
   if (match === null) return null;
+  // A row whose title shows no match must say why. With several words, one
+  // that cannot (its words spread over unrelated fields) is a coincidence and
+  // is left out; a single word always sits in the field that matched it, so
+  // its hint waits until the row is shown.
+  const typos = options?.typos ?? false;
+  const titleShowsMatch = match.primaryRanges.length > 0;
+  const checkHint = !titleShowsMatch && referenceMatch === null && fieldQuery.includes(" ");
+  const checkedHint = checkHint ? matchHint(fieldQuery, thread, typos) : undefined;
+  if (checkHint && checkedHint === undefined) return null;
+  const explain = titleShowsMatch
+    ? undefined
+    : (): SearchMatchHint | undefined =>
+        referenceMatch
+          ? { label: "ID or link", text: normalizedQuery, ranges: [] }
+          : (checkedHint ?? matchHint(fieldQuery, thread, typos));
   const pick = options?.picks === false ? undefined : activePick(thread, normalizedQuery, now);
   const pickedAt = pick?.at;
-  const explain =
-    match.primaryRanges.length > 0
-      ? undefined
-      : (): SearchMatchHint | undefined =>
-          referenceMatch
-            ? { label: "ID or link", text: normalizedQuery, ranges: [] }
-            : matchHint(fieldQuery, thread, options?.typos ?? false);
   return {
     score: match.quality * threadUsageBoost(thread, now),
     quality: match.quality,
@@ -1002,8 +1030,10 @@ export function rankMessageMatches<
     })
     .sort(
       (left, right) =>
-        right.quality - left.quality ||
+        // Word matches first; among them a pick, then the closer match.
+        Number(right.quality >= MESSAGE_PREFIX) - Number(left.quality >= MESSAGE_PREFIX) ||
         right.pickedAt - left.pickedAt ||
+        right.quality - left.quality ||
         right.score - left.score ||
         (right.match.messageCreatedAt ?? "").localeCompare(left.match.messageCreatedAt ?? ""),
     )
@@ -1032,11 +1062,11 @@ export interface RankedSearchItem<T, M> {
 }
 
 /**
- * Ranks grouped items: within a group, results picked for the query first
- * (latest pick first), then by match class, then best score. Groups with no match are dropped. The
- * rest order by the class of their best match (word starts in a name, typos in
- * a name or keyword matches, or weaker), one class higher for a result picked
- * for exactly this query, and ties keep the given order. Classes
+ * Ranks grouped items: within a group, word matches before weaker ones,
+ * results picked for the query first among them, then by match class, then
+ * best score. Groups with no match are dropped. The rest order by the class of
+ * their best match (the whole name, word starts in a name, typos in a name or
+ * keyword matches, or weaker), and ties keep the given order. Classes
  * rather than scores keep the group order steady while a word is typed, and
  * keep use, which only counts for threads, from outweighing a command that
  * matches as well.
@@ -1090,10 +1120,7 @@ export function rankSearchGroups<
           right.match.score - left.match.score,
       );
       const best = Math.max(
-        ...items.map(
-          ({ match }) =>
-            matchClass(match.groupQuality ?? match.quality) + (match.pickedExactly ? 1 : 0),
-        ),
+        ...items.map(({ match }) => matchClass(match.groupQuality ?? match.quality)),
       );
       return [{ group, ranked: sorted, best, order }];
     })
@@ -1138,7 +1165,12 @@ export function scoreSearchTerms(
   terms: ReadonlyArray<string>,
   options?: { readonly typos?: boolean },
 ): SearchTermsMatch | null {
-  const short = normalizedQuery.length < KEYWORD_QUERY_MIN_LENGTH;
+  // Filler words ("the ci") do not make a short query long.
+  const meaningful = normalizedQuery
+    .split(" ")
+    .filter((token) => !FILLER_WORDS.has(token))
+    .join(" ");
+  const short = (meaningful || normalizedQuery).length < KEYWORD_QUERY_MIN_LENGTH;
   const match = matchSearchFields(
     normalizedQuery,
     terms.map((value, index) =>

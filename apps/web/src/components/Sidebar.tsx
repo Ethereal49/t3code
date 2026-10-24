@@ -31,8 +31,10 @@ import {
 import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  nextShownOrder,
   threadSearchMatchKey,
   threadSearchSubject,
+  type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { foldSearchQuery, rankMessageMatches } from "@t3tools/shared/paletteSearch";
 import { findForMessageMatch, requestThreadFindQuery } from "./chat/threadFindActionBus";
@@ -1110,23 +1112,42 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   ]);
 
   // Ranked across environments as the palette ranks them, so one
-  // environment's list does not sit above another's better matches.
-  const subjectByMatchKey = new Map(
-    searchableThreads.map((thread) => [
-      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-      threadSearchSubject(thread, null),
-    ]),
-  );
+  // environment's list does not sit above another's better matches; rows
+  // already shown keep their places while slower environments answer.
+  const threadByMatchKey =
+    threadSearch.matches.length === 0
+      ? null
+      : new Map(
+          searchableThreads.map((thread) => [
+            threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+            thread,
+          ]),
+        );
+  const rankedServerMatches =
+    threadByMatchKey === null
+      ? []
+      : rankMessageMatches(
+          threadSearch.matches,
+          (match) => {
+            const thread = threadByMatchKey.get(threadSearchMatchKey(match));
+            return thread ? threadSearchSubject(thread, null) : undefined;
+          },
+          foldSearchQuery(threadSearchQuery),
+          Date.now(),
+        );
   const serverMatchByKey = new Map(
-    rankMessageMatches(
-      threadSearch.matches,
-      (match) => subjectByMatchKey.get(threadSearchMatchKey(match)),
-      foldSearchQuery(threadSearchQuery),
-      Date.now(),
-    ).map((match) => [threadSearchMatchKey(match), match] as const),
+    rankedServerMatches.map((match) => [threadSearchMatchKey(match), match] as const),
   );
+  const [shownMessageOrder, setShownMessageOrder] = useState<ShownOrder | null>(null);
+  const messageOrder = nextShownOrder(
+    shownMessageOrder,
+    threadSearch.query,
+    [...serverMatchByKey.keys()],
+    Number.POSITIVE_INFINITY,
+  );
+  if (messageOrder !== shownMessageOrder) setShownMessageOrder(messageOrder);
   const { titleMatches: threadTitleResults, contentMatches: threadContentResults } =
-    searchSidebarThreads(searchableThreads, threadSearchQuery, new Set(serverMatchByKey.keys()));
+    searchSidebarThreads(searchableThreads, threadSearchQuery, new Set(messageOrder.keys));
   const threadSearchResults = [...threadTitleResults, ...threadContentResults];
   // Only rows listed for their messages show one, and open find on it.
   const threadSearchMatchByKey = new Map(
