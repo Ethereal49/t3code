@@ -181,6 +181,7 @@ export function useCommandPaletteThreadItems(input: {
     (match) => itemForMatch(match)?.threadSearch,
     foldSearchQuery(threadSearchQuery),
     now,
+    { withoutTitleMatches: true },
   ).flatMap((match) => {
     const item = itemForMatch(match);
     if (!item) return [];

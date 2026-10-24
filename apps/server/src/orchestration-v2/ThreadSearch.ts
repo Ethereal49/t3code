@@ -214,6 +214,9 @@ export const messageHitsQuery = (
             ), 0)
         `
     }
+      -- Answers to an agent's question show inside its question card, where
+      -- neither find nor a jump can reach them.
+      AND messages.message_id NOT LIKE 'async-answer:%'
       AND NOT EXISTS (
         SELECT 1 FROM json_each(${substrings}) AS token
         WHERE instr(lower(json_extract(messages.payload_json, '$.text')), token.value) = 0
@@ -314,7 +317,13 @@ export const make = Effect.gen(function* () {
   // A project scope applies before ranking, so other projects' stronger hits
   // cannot use up the limit.
   const searchMessages = Effect.fn("ThreadSearch.searchMessages")(function* (
-    input: OrchestrationSearchThreadsInput & { readonly projectId: ProjectId | null },
+    input: OrchestrationSearchThreadsInput & {
+      readonly projectId: ProjectId | null;
+      /** Threads the caller already lists, which must not use up the limit. */
+      readonly excludedThreadIds?: ReadonlySet<ThreadId>;
+      /** Off for an agent's search, which has no use for the user's picks. */
+      readonly picks?: boolean;
+    },
   ) {
     // One message per thread: the best word match, then what the user wrote,
     // since that is what they remember asking, then the newest by when it was
@@ -351,6 +360,7 @@ export const make = Effect.gen(function* () {
     const hitCounts = new Map<ThreadId, number>();
     const hitCount = (threadId: ThreadId) => hitCounts.get(threadId) ?? 1;
     for (const row of rows) {
+      if (input.excludedThreadIds?.has(row.threadId)) continue;
       const text = row.text.replace(MARKDOWN_LINK, "$1");
       const match = scoreMessageMatch(text, input.query);
       if (match === null) continue;
@@ -387,6 +397,7 @@ export const make = Effect.gen(function* () {
       (hit) => subjectById.get(hit.row.threadId),
       foldSearchQuery(input.query),
       now,
+      { picks: input.picks ?? true },
     );
     return {
       matches: ranked.slice(0, input.limit ?? 50).map(({ row, text, quality, offset }) => ({
@@ -450,17 +461,15 @@ export const make = Effect.gen(function* () {
       query: input.query,
       limit: 50,
       projectId: input.projectId ?? null,
+      excludedThreadIds: shown,
+      picks: false,
     });
-    const messageHits = rankMessageMatches(
-      matches.filter((match) => subjectById.has(match.threadId) && !shown.has(match.threadId)),
-      (match) => subjectById.get(match.threadId),
-      normalizedQuery,
-      now,
-      { picks: false },
-    ).map(({ quality: _quality, hits: _hits, messageId: _messageId, ...match }) => ({
-      ...match,
-      title: subjectById.get(match.threadId)!.title,
-    }));
+    const messageHits = matches
+      .filter((match) => subjectById.has(match.threadId))
+      .map(({ quality: _quality, hits: _hits, messageId: _messageId, ...match }) => ({
+        ...match,
+        title: subjectById.get(match.threadId)!.title,
+      }));
     // Titles come first, but a fifth of the slots stay for message matches,
     // as the palette keeps its "In messages" section.
     const messageSlots = Math.min(messageHits.length, Math.floor(limit / 5));

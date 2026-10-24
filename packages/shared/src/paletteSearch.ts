@@ -912,7 +912,8 @@ function messageMatchWeight(hits: number): number {
  * Orders message matches from the server, from any number of environments:
  * by match quality (whole words, then word prefixes, then inside words), then
  * threads picked for the query, then hit count times use, then the newest
- * message.
+ * message. With `withoutTitleMatches`, threads that match by title are left
+ * out: a palette lists them above, so they must not use up message rows.
  */
 export function rankMessageMatches<
   T extends {
@@ -925,12 +926,18 @@ export function rankMessageMatches<
   subjectOf: (match: T) => ThreadSearchSubject | undefined,
   normalizedQuery: string,
   now: number,
-  options?: { readonly picks?: boolean },
+  options?: { readonly picks?: boolean; readonly withoutTitleMatches?: boolean },
 ): T[] {
   return matches
     .flatMap((match) => {
       const subject = subjectOf(match);
       if (!subject) return [];
+      if (
+        options?.withoutTitleMatches &&
+        scoreThreadSearch(normalizedQuery, subject, now, { picks: false }) !== null
+      ) {
+        return [];
+      }
       // Older servers send no quality; their matches count as words.
       const quality = match.quality ?? 1;
       return [

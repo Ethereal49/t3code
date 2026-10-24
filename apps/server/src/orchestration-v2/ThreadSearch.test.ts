@@ -443,6 +443,25 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
     }),
   );
 
+  it.effect("leaves out answers to an agent's question, which show in its card", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:answers");
+      const asked = ThreadId.make("thread:answers");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(asked, project),
+          message(asked, "async-answer:request-1", "user", "use the albatross drive"),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      assert.deepEqual((yield* search.search({ query: "albatross" })).matches, []);
+    }),
+  );
+
   it.effect("matches messages as they read, with links as their text", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -577,6 +596,37 @@ it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) =>
 });
 
 it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
+  it.effect("keeps room for a message-only thread behind many titled ones", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("project:petrel");
+      yield* createProject(project);
+      const messageOnly = ThreadId.make("thread:petrel-message");
+      yield* Effect.forEach(
+        [
+          thread(messageOnly, project),
+          // The oldest message, so a cut taken before titles drop would lose it.
+          message(messageOnly, "petrel-old", "user", "a petrel note", { minute: 1 }),
+          ...Array.from({ length: 50 }, (_, index) => {
+            const id = ThreadId.make(`thread:petrel-${index}`);
+            return [
+              thread(id, project, { title: `Petrel ${index}` }),
+              message(id, `petrel-${index}`, "user", "petrel again", { minute: 2 }),
+            ];
+          }).flat(),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      const { matches } = yield* search.searchThreads({ query: "petrel", limit: 5 });
+      assert.include(
+        matches.map((match) => match.threadId),
+        messageOnly,
+      );
+    }),
+  );
+
   it.effect("ranks title matches like the palette, then message matches, within one project", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

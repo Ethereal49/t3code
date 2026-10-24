@@ -628,19 +628,18 @@ export function buildThreadListV2Items(input: {
       (input.environmentId === null || thread.environmentId === input.environmentId) &&
       (projectKeys === null || projectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
-  // The same matches as the command palette, typo fallback included; the list keeps its order.
-  // Only listed threads are ranked: a hidden exact match must not turn typos off.
-  const matchingThreads =
+  // The same matches as the command palette, typo fallback included. Only
+  // listed threads are ranked: a hidden exact match must not turn typos off.
+  const rankedMatches =
     query.length > 0
-      ? new Set(
-          rankSearchItems(listedThreads, (thread, options) =>
-            scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, {
-              ...options,
-              picks: false,
-            }),
-          ).map(({ item }) => item),
-        )
+      ? rankSearchItems(listedThreads, (thread, options) =>
+          scoreThreadSearch(query, threadSearchSubject(thread, null), nowMs, {
+            ...options,
+            picks: false,
+          }),
+        ).map(({ item }) => item)
       : null;
+  const matchingThreads = rankedMatches === null ? null : new Set(rankedMatches);
   // Threads listed only because their messages match; only their rows show
   // the message and open at it.
   const contentOnlyThreadKeys = new Set<string>();
@@ -677,6 +676,45 @@ export function buildThreadListV2Items(input: {
     } else {
       active.push(thread);
     }
+  }
+
+  if (rankedMatches !== null) {
+    // Searching lists every match by rank across shelves, as the palette and
+    // the web sidebar do, then threads listed for their messages in the
+    // server's order. Each row keeps its shelf's look.
+    const slim = new Set([...snoozed, ...settled]);
+    const snoozedThreads = new Set(snoozed);
+    const pinnedThreads = new Set(pinned);
+    const threadByKey = new Map(
+      listedThreads.map((thread) => [
+        threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+        thread,
+      ]),
+    );
+    const contentOnly = [...(input.matchedThreadKeys ?? [])].flatMap((key) => {
+      const thread = contentOnlyThreadKeys.has(key) ? threadByKey.get(key) : undefined;
+      return thread ? [thread] : [];
+    });
+    const results = [...rankedMatches, ...contentOnly];
+    return {
+      items: results.map((thread, index) => ({
+        thread,
+        variant: slim.has(thread) ? "slim" : "card",
+        snoozed: snoozedThreads.has(thread),
+        pinned: pinnedThreads.has(thread),
+        wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
+        isLast: index === results.length - 1,
+      })),
+      hiddenSettledCount: 0,
+      workingCount: 0,
+      workingShelfHeaderIndex: null,
+      snoozedCount: 0,
+      snoozedShelfHeaderIndex: null,
+      settledCount: 0,
+      settledShelfHeaderIndex: null,
+      nextSnoozeWakeAt,
+      contentOnlyThreadKeys,
+    };
   }
 
   const orderedActive = workingShelfEnabled

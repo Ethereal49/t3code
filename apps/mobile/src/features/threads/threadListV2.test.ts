@@ -152,22 +152,29 @@ describe("queued messages keep a settled thread active", () => {
   });
 });
 
-describe("search keeps message matches apart from title matches", () => {
+describe("search lists ranked matches", () => {
   const matchKey = (id: string) =>
     threadSearchMatchKey({ environmentId, threadId: ThreadId.make(id) });
 
-  it("marks only threads listed for their messages", () => {
+  it("lists matches by rank across shelves, then threads listed for their messages", () => {
     const layout = buildThreadListV2Items({
       threads: [
-        makeThread({ id: ThreadId.make("titled"), title: "Fix sidebar lag" }),
+        makeThread({ id: ThreadId.make("notes"), title: "Deploy notes" }),
         makeThread({ id: ThreadId.make("mentioned"), title: "Weekly notes" }),
+        makeThread({ id: ThreadId.make("exact"), title: "Deploy", settledOverride: "settled" }),
       ],
       environmentId: null,
-      searchQuery: "sidebar",
-      matchedThreadKeys: new Set([matchKey("titled"), matchKey("mentioned")]),
+      searchQuery: "deploy",
+      matchedThreadKeys: new Set([matchKey("mentioned"), matchKey("notes")]),
+      settledShelfExpanded: false,
       now: NOW,
     });
-    expect(layout.items.map((item) => item.thread.id).toSorted()).toEqual(["mentioned", "titled"]);
+    // The exact title leads even from a collapsed Settled shelf, and keeps its look.
+    expect(layout.items.map((item) => [item.thread.id, item.variant])).toEqual([
+      ["exact", "slim"],
+      ["notes", "card"],
+      ["mentioned", "card"],
+    ]);
     expect([...layout.contentOnlyThreadKeys]).toEqual([matchKey("mentioned")]);
   });
 });

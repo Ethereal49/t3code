@@ -441,6 +441,7 @@ export function CommandPalette(props: {
       (match) => subjectByKey.get(keyOf(match)),
       foldSearchQuery(query),
       now,
+      { withoutTitleMatches: true },
     ).map(keyOf);
   }, [items, now, query, search.matches]);
   // Rows already shown keep their places when a slower environment answers.

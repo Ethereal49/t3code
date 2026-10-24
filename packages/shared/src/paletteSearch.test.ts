@@ -423,6 +423,17 @@ describe("rankMessageMatches", () => {
         (match) => match.key,
       ),
     ).toEqual(["b-recent", "a-word", "a-word-2", "b-picked", "b-prefix"]);
+    // A palette lists title matches above, so they use up no message rows.
+    const titled = new Map([...subjects, ["c-titled", thread("Needle cleanup")]]);
+    expect(
+      rankMessageMatches(
+        [{ key: "c-titled", quality: 1 }, ...matches],
+        (match) => titled.get(match.key),
+        "needle",
+        NOW,
+        { withoutTitleMatches: true },
+      ).map((match) => match.key),
+    ).not.toContain("c-titled");
   });
 
   it("ranks a thread that keeps using the word above a passing mention of equal quality", () => {
