@@ -116,6 +116,7 @@ export function canSnooze(
     | "hasPendingApprovals"
     | "hasPendingUserInput"
     | "pendingSubagentRequest"
+    | "pendingGuestMessageCount"
     | "latestUserMessageAt"
     | "latestTurn"
     | "latestRun"
@@ -129,6 +130,8 @@ export function canSnooze(
   // The server rejects snoozing even for nonblocking questions.
   if (shell.source?.pendingRuntimeRequest != null) return false;
   if (shell.pendingSubagentRequest != null) return false;
+  // A waiting guest message would wake it at once.
+  if ((shell.pendingGuestMessageCount ?? 0) > 0) return false;
   if (hasQueuedTurnStart(shell, options)) return false;
   return true;
 }

@@ -25,6 +25,13 @@ export type GuestShareCommand = Extract<
   }
 >;
 
+/** Failures a guest may be told about. Any other dispatch failure reaches them as "rejected". */
+export const GUEST_FAILURE = {
+  inactive: "This guest link is no longer active.",
+  used: "This guest link was already used.",
+  busy: "Wait for the owner to answer your earlier messages.",
+} as const;
+
 const isExpired = (share: ThreadGuestShare, now: DateTime.Utc) =>
   DateTime.toEpochMillis(now) >= Date.parse(share.expiresAt);
 
@@ -96,9 +103,9 @@ export function decideGuestShareCommand(input: {
       return share === null ? Result.succeed(thread) : withShare(null);
     case "thread.guest-share.redeem": {
       if (share === null || share.id !== command.shareId || isExpired(share, now)) {
-        return Result.fail("This guest link is no longer active.");
+        return Result.fail(GUEST_FAILURE.inactive);
       }
-      if (share.guestName !== null) return Result.fail("This guest link was already used.");
+      if (share.guestName !== null) return Result.fail(GUEST_FAILURE.used);
       return withShare({ ...share, guestName: command.guestName });
     }
     case "thread.guest-message.submit": {
@@ -108,13 +115,13 @@ export function decideGuestShareCommand(input: {
         share.guestName === null ||
         isExpired(share, now)
       ) {
-        return Result.fail("This guest link is no longer active.");
+        return Result.fail(GUEST_FAILURE.inactive);
       }
       if (
         share.messages.filter((message) => message.status === "pending").length >=
         GUEST_PENDING_MESSAGE_LIMIT
       ) {
-        return Result.fail("Wait for the owner to answer your earlier messages.");
+        return Result.fail(GUEST_FAILURE.busy);
       }
       return withShare({
         ...share,

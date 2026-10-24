@@ -121,7 +121,14 @@ export function GuestPage() {
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       {credential !== null && !joined ? (
-        <NameForm credential={credential} onJoined={() => setJoined(true)} />
+        <NameForm
+          credential={credential}
+          onJoined={() => {
+            // The invite is spent; a remount must open the session, not the name form again.
+            capturedInvite = { credential: null };
+            setJoined(true);
+          }}
+        />
       ) : (
         <GuestSession />
       )}

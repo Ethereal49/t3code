@@ -64,17 +64,40 @@ export const GuestShareCreateResult = Schema.Struct({
 });
 export type GuestShareCreateResult = typeof GuestShareCreateResult.Type;
 
+const GUEST_SHARE_CREATE_MESSAGES = {
+  connect_unavailable: "Guest links need a running T3 Connect tunnel.",
+  thread_unavailable: "This thread cannot be shared.",
+  read_failed: "Failed to read the shared thread.",
+  changed: "The guest link changed while it was being created.",
+} as const;
+
 export class GuestShareCreateError extends Schema.TaggedError<GuestShareCreateError>()(
   "GuestShareCreateError",
   {
-    reason: Schema.Literals(["connect_unavailable", "thread_unavailable", "internal"]),
-    message: Schema.String,
+    reason: Schema.Literals([
+      "connect_unavailable",
+      "thread_unavailable",
+      "read_failed",
+      "changed",
+    ]),
   },
-) {}
+) {
+  override get message(): string {
+    return GUEST_SHARE_CREATE_MESSAGES[this.reason];
+  }
+}
+
+// The name lands in the agent's attribution line, so it must stay one plain line.
+const NAME_BREAKING_CHARACTER = /[\p{Cc}\p{Zl}\p{Zp}]/u;
 
 export const GuestRedeemRequest = Schema.Struct({
   credential: TrimmedNonEmptyString,
-  name: TrimmedNonEmptyString.check(Schema.isMaxLength(GUEST_NAME_MAX_LENGTH)),
+  name: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(GUEST_NAME_MAX_LENGTH),
+    Schema.makeFilter((name) => !NAME_BREAKING_CHARACTER.test(name), {
+      description: "a single line of text",
+    }),
+  ),
 });
 export type GuestRedeemRequest = typeof GuestRedeemRequest.Type;
 

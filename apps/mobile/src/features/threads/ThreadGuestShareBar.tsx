@@ -12,7 +12,7 @@ import {
   type ThreadGuestShare,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
 
 import { Button } from "../../components/ui/Button";
@@ -71,8 +71,16 @@ export function ThreadGuestShareBar(props: {
   const share = useThreadGuestShare(threadRef);
   const closeGuestShare = useAtomCommand(threadEnvironment.closeGuestShare, "stop guest sharing");
   const [busy, setBusy] = useState(false);
-  // Checked when the thread opens; an expired link stays listed until the owner stops sharing.
-  const [openedAt] = useState(Date.now);
+  // An expired link stays listed until the owner stops sharing; the label flips when it expires.
+  const [now, setNow] = useState(Date.now);
+  const expiresAt = share?.expiresAt;
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    const remaining = Date.parse(expiresAt) - Date.now();
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => setNow(Date.now()), remaining);
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
   if (threadRef === null || !share) return null;
 
   const disabled = busy || !props.canOperateThread;
@@ -99,7 +107,7 @@ export function ThreadGuestShareBar(props: {
     <View className="flex-row items-center gap-2 px-4 pb-2">
       <SymbolView name="person.2" size={12} tintColorClassName="accent-foreground-muted" />
       <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-        {isGuestShareExpired(share, openedAt)
+        {isGuestShareExpired(share, now)
           ? "Guest link expired"
           : share.guestName === null
             ? "Guest link active"

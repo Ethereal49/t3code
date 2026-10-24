@@ -33,6 +33,7 @@ import {
 } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { CloudManagedEndpointRuntime } from "../cloud/ManagedEndpointRuntime.ts";
+import { GUEST_FAILURE } from "../orchestration-v2/GuestShareDecider.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import {
   guestItemEvent,
@@ -53,13 +54,33 @@ const WORKING_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new Set(
   "waiting",
 ]);
 
+const GUEST_ACCESS_MESSAGES = {
+  ...GUEST_FAILURE,
+  invalid: "This guest link is not valid.",
+  stale_page: "This page is for an older guest link. Reload it to continue.",
+  rejected: "The owner's server rejected this request.",
+} as const;
+
+/** What a guest is told. The message comes from `reason`, never from a cause. */
 export class GuestShareAccessError extends Schema.TaggedError<GuestShareAccessError>()(
   "GuestShareAccessError",
   {
-    reason: Schema.Literals(["invalid", "inactive", "rejected"]),
-    message: Schema.String,
+    reason: Schema.Literals(["invalid", "inactive", "used", "busy", "stale_page", "rejected"]),
   },
-) {}
+) {
+  override get message(): string {
+    return GUEST_ACCESS_MESSAGES[this.reason];
+  }
+}
+
+const guestFailureReason = (cause: unknown): GuestShareAccessError["reason"] =>
+  cause === GUEST_FAILURE.inactive
+    ? "inactive"
+    : cause === GUEST_FAILURE.used
+      ? "used"
+      : cause === GUEST_FAILURE.busy
+        ? "busy"
+        : "rejected";
 
 const TokenClaims = Schema.Struct({
   kind: Schema.Literals(["invite", "session"]),
@@ -69,10 +90,7 @@ const TokenClaims = Schema.Struct({
 type TokenClaims = typeof TokenClaims.Type;
 const decodeClaims = Schema.decodeUnknownOption(Schema.fromJsonString(TokenClaims));
 
-const inactive = new GuestShareAccessError({
-  reason: "inactive",
-  message: "This guest link is no longer active.",
-});
+const inactive = new GuestShareAccessError({ reason: "inactive" });
 
 export class GuestShareService extends Context.Service<
   GuestShareService,
@@ -129,13 +147,9 @@ const make = Effect.gen(function* () {
   ) =>
     orchestrator.dispatch(command).pipe(
       Effect.mapError(
-        (cause) =>
+        (error) =>
           new GuestShareAccessError({
-            reason: "rejected",
-            message:
-              "cause" in cause && typeof cause.cause === "string"
-                ? cause.cause
-                : "The owner's server rejected this request.",
+            reason: guestFailureReason("cause" in error ? error.cause : undefined),
           }),
       ),
     );
@@ -153,10 +167,7 @@ const make = Effect.gen(function* () {
   ) {
     const claims = yield* verify(token, kind);
     if (Option.isNone(claims)) {
-      return yield* new GuestShareAccessError({
-        reason: "invalid",
-        message: "This guest link is not valid.",
-      });
+      return yield* new GuestShareAccessError({ reason: "invalid" });
     }
     const { thread } = yield* orchestrator
       .getThreadRecords(claims.value.threadId, [])
@@ -180,10 +191,7 @@ const make = Effect.gen(function* () {
   const create = Effect.fn("GuestShareService.create")(function* (input: GuestShareCreateInput) {
     const host = yield* connectHostname;
     if (host === null) {
-      return yield* new GuestShareCreateError({
-        reason: "connect_unavailable",
-        message: "Guest links need a running T3 Connect tunnel.",
-      });
+      return yield* new GuestShareCreateError({ reason: "connect_unavailable" });
     }
     const shareId = GuestShareId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
     const now = yield* DateTime.now;
@@ -197,29 +205,12 @@ const make = Effect.gen(function* () {
         host,
         expiresAt,
       })
-      .pipe(
-        Effect.mapError(
-          () =>
-            new GuestShareCreateError({
-              reason: "thread_unavailable",
-              message: "This thread cannot be shared.",
-            }),
-        ),
-      );
-    const { thread } = yield* orchestrator.getThreadRecords(input.threadId, []).pipe(
-      Effect.mapError(
-        () =>
-          new GuestShareCreateError({
-            reason: "internal",
-            message: "Failed to read the shared thread.",
-          }),
-      ),
-    );
+      .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "thread_unavailable" })));
+    const { thread } = yield* orchestrator
+      .getThreadRecords(input.threadId, [])
+      .pipe(Effect.mapError(() => new GuestShareCreateError({ reason: "read_failed" })));
     if (!thread.guestShare || thread.guestShare.id !== shareId) {
-      return yield* new GuestShareCreateError({
-        reason: "internal",
-        message: "The guest link changed while it was being created.",
-      });
+      return yield* new GuestShareCreateError({ reason: "changed" });
     }
     const credential = yield* sign({ kind: "invite", threadId: input.threadId, shareId });
     return { url: `https://${host}/guest#${credential}`, share: thread.guestShare };
@@ -243,10 +234,7 @@ const make = Effect.gen(function* () {
   ) {
     const { thread, share } = yield* authorize(session, "session");
     if (request.shareId !== share.id) {
-      return yield* new GuestShareAccessError({
-        reason: "rejected",
-        message: "This page is for an older guest link. Reload it to continue.",
-      });
+      return yield* new GuestShareAccessError({ reason: "stale_page" });
     }
     yield* dispatchGuestCommand({
       type: "thread.guest-message.submit",

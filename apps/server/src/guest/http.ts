@@ -24,7 +24,10 @@ const decodeSubmit = Schema.decodeUnknownEffect(GuestSubmitRequest);
 const errorResponse = (error: GuestShareAccessError) =>
   HttpServerResponse.json(
     { reason: error.reason, message: error.message },
-    { status: error.reason === "rejected" ? 409 : 403, headers: NO_STORE },
+    {
+      status: error.reason === "invalid" || error.reason === "inactive" ? 403 : 409,
+      headers: NO_STORE,
+    },
   );
 
 const badRequest = HttpServerResponse.json(
