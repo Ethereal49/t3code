@@ -54,20 +54,21 @@ export function coalesceLiveUpdatedEvents(
 ): ReadonlyArray<ThreadLiveEvent> {
   const latestUpdates = new Map<string, number>();
   const superseded = new Set<number>();
-  let pendingMessageKey: string | null = null;
+  const pendingKeys = new Map<ThreadLiveEvent["event"]["type"], string>();
 
   for (const [index, event] of events.entries()) {
     const key = coalescibleUpdateKey(event);
     if (key === null) {
       latestUpdates.clear();
-      pendingMessageKey = null;
+      pendingKeys.clear();
       continue;
     }
-    if (event.event.type === "message.updated") {
-      // Clients use message insertion order to select the last assistant.
-      if (pendingMessageKey !== null && pendingMessageKey !== key) latestUpdates.clear();
-      pendingMessageKey = key;
-    }
+    // Both entity families use insertion order; partial timelines also reject
+    // unseen items below their watermark. Keep identity switches within each
+    // family, while allowing paired message/item updates to coalesce.
+    const pendingKey = pendingKeys.get(event.event.type);
+    if (pendingKey !== undefined && pendingKey !== key) latestUpdates.clear();
+    pendingKeys.set(event.event.type, key);
     const previous = latestUpdates.get(key);
     if (previous !== undefined) superseded.add(previous);
     latestUpdates.set(key, index);

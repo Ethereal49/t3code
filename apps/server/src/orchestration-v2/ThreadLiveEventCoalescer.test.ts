@@ -1,6 +1,9 @@
 import {
   EventId,
   MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  type OrchestrationV2ThreadProjection,
   ThreadId,
   RunId,
   TurnItemId,
@@ -18,6 +21,8 @@ import {
   coalesceThreadLiveStream,
   makeThreadLiveEventCoalescer,
 } from "./ThreadLiveEventCoalescer.ts";
+
+import { applyOrchestrationV2ProjectionEvent } from "../../../../packages/client-runtime/src/state/orchestrationV2Projection.ts";
 
 type ThreadEvent = Extract<OrchestrationV2ThreadStreamItem, { readonly kind: "event" }>;
 const threadId = ThreadId.make("thread-coalescer-test");
@@ -150,14 +155,14 @@ function makeTextItem(
 }
 
 describe("ThreadLiveEventCoalescer", () => {
-  it("coalesces only calls with a stable toolCallId", () => {
+  it("preserves tool-call identity switches as insertion-order boundaries", () => {
     const events = [
       makeToolActivity(1, { toolCallId: "call-a" }),
       makeToolActivity(2, { toolCallId: "call-b" }),
       makeToolActivity(3, { toolCallId: "call-a" }),
     ];
 
-    expect(coalesceLiveUpdatedEvents(events).map((event) => event.sequence)).toEqual([2, 3]);
+    expect(coalesceLiveUpdatedEvents(events).map((event) => event.sequence)).toEqual([1, 2, 3]);
   });
 
   it("does not coalesce stable tool calls across turns", () => {
@@ -195,7 +200,7 @@ describe("ThreadLiveEventCoalescer", () => {
       makeTextItem(11, { id: "shared", streaming: false, status: "completed", text: "Hello!" }),
     ];
     const survivors = coalesceLiveUpdatedEvents(events);
-    expect(survivors).toEqual(events.slice(4));
+    expect(survivors).toEqual(events);
 
     const latestStates = (input: ReadonlyArray<ThreadEvent>) =>
       Object.fromEntries(
@@ -224,22 +229,153 @@ describe("ThreadLiveEventCoalescer", () => {
     expect(coalesceLiveUpdatedEvents(events)).toEqual(events);
   });
 
+  it.effect(
+    "preserves turn-item insertion and partial timeline state after every survivor cursor",
+    () =>
+      Effect.gen(function* () {
+        const item = (
+          sequence: number,
+          id: string,
+          text: string,
+          completed = false,
+        ): ThreadEvent => {
+          const input = makeTextItem(sequence, {
+            id,
+            text,
+            type: "reasoning",
+            status: completed ? "completed" : "running",
+            streaming: !completed,
+          });
+          if (input.event.type !== "turn-item.updated") throw new Error("Expected turn item");
+          return {
+            ...input,
+            event: {
+              ...input.event,
+              runId: undefined,
+              payload: {
+                ...input.event.payload,
+                runId: null,
+                ordinal: id === "a" ? 1 : 2,
+                completedAt: completed ? now : null,
+              },
+            },
+          };
+        };
+        const events = [
+          item(1, "a", "A"),
+          item(2, "b", "B"),
+          item(3, "a", "AA"),
+          item(4, "a", "Final A", true),
+          item(5, "b", "Final B", true),
+        ];
+        const emptyProjection = {
+          thread: {
+            id: threadId,
+            projectId: ProjectId.make("project-reducer"),
+            title: "Reducer",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
+            forkedFrom: null,
+            createdBy: "user",
+            creationSource: "web",
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+          runs: [],
+          attempts: [],
+          nodes: [],
+          subagents: [],
+          providerSessions: [],
+          providerThreads: [],
+          providerTurns: [],
+          runtimeRequests: [],
+          messages: [],
+          plans: [],
+          turnItems: [],
+          checkpointScopes: [],
+          checkpoints: [],
+          contextHandoffs: [],
+          contextTransfers: [],
+          visibleTurnItems: [],
+          updatedAt: now,
+        } satisfies OrchestrationV2ThreadProjection;
+        const apply = (inputs: ReadonlyArray<ThreadEvent>, partialTimeline: boolean) => {
+          let projection: OrchestrationV2ThreadProjection = emptyProjection;
+          let latestLocalTurnOrdinal = 0;
+          for (const { event } of inputs) {
+            const next = applyOrchestrationV2ProjectionEvent(projection, event, {
+              partialTimeline,
+              latestLocalTurnOrdinal,
+            });
+            if (next === null || next === projection) continue;
+            projection = next;
+            if (partialTimeline && event.type === "turn-item.updated") {
+              latestLocalTurnOrdinal = Math.max(latestLocalTurnOrdinal, event.payload.ordinal);
+            }
+          }
+          return projection;
+        };
+        const survivors = yield* Stream.fromIterable(events).pipe(
+          coalesceThreadLiveStream,
+          Stream.filter((input): input is ThreadEvent => input.kind === "event"),
+          Stream.runCollect,
+        );
+        for (const partialTimeline of [true, false]) {
+          const expected = apply(events, partialTimeline);
+          expect(
+            expected.turnItems.map((item) => [item.id, "text" in item ? item.text : null]),
+          ).toEqual([
+            ["a", "Final A"],
+            ["b", "Final B"],
+          ]);
+          expect(apply(survivors, partialTimeline)).toEqual(expected);
+          for (const [index, survivor] of survivors.entries()) {
+            const received = survivors.slice(0, index + 1);
+            const replay = yield* Stream.fromIterable(
+              events.filter((event) => event.sequence > survivor.sequence),
+            ).pipe(
+              coalesceThreadLiveStream,
+              Stream.filter((input): input is ThreadEvent => input.kind === "event"),
+              Stream.runCollect,
+            );
+            expect(apply([...received, ...replay], partialTimeline)).toEqual(expected);
+          }
+        }
+      }),
+  );
+
   it.effect("flushes text at synchronization and completion boundaries", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const coalescer = yield* makeThreadLiveEventCoalescer();
         const events = [
           makeStreamingMessage(1),
-          makeTextItem(2),
+          makeTextItem(2, { type: "reasoning" }),
           makeStreamingMessage(3),
-          makeTextItem(4),
+          makeTextItem(4, { type: "reasoning" }),
           { kind: "synchronized" } as const,
           makeStreamingMessage(5),
-          makeTextItem(6),
+          makeTextItem(6, { type: "reasoning" }),
           makeStreamingMessage(7, { streaming: false, text: "Final answer" }),
-          makeTextItem(8, { streaming: false, status: "completed", text: "Final answer" }),
+          makeTextItem(8, {
+            type: "reasoning",
+            streaming: false,
+            status: "completed",
+            text: "Final answer",
+          }),
           makeStreamingMessage(9),
-          makeTextItem(10),
+          makeTextItem(10, { type: "reasoning" }),
         ];
         yield* coalescer.offerAll(events);
         yield* coalescer.end;
