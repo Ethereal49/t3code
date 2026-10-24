@@ -90,6 +90,9 @@ export const GuestTranscriptItem = Schema.Union([
     id: TrimmedNonEmptyString,
     text: Schema.String,
     streaming: Schema.Boolean,
+    /** Set on a user message a guest wrote. Earlier links' guests show by name, not as "You". */
+    guestMessageId: Schema.optional(GuestMessageId),
+    guestName: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     kind: Schema.Literal("question"),

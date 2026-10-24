@@ -50,6 +50,27 @@ describe("guestTranscriptItem", () => {
       streaming: false,
     });
   });
+
+  it("shows a sent guest message as the guest wrote it, without the agent's attribution", () => {
+    const guest = { guestMessageId: "guest-message:one", name: "Sam", text: "Why?" };
+    expect(
+      guestTranscriptItem(
+        item({
+          type: "user_message",
+          text: "Message from guest Sam, sent by the owner:\n\nWhy?",
+          createdBy: "user",
+          context: { version: 1, records: [], guest },
+        }),
+      ),
+    ).toEqual({
+      kind: "user",
+      id: "item",
+      text: "Why?",
+      streaming: false,
+      guestMessageId: "guest-message:one",
+      guestName: "Sam",
+    });
+  });
 });
 
 describe("guestItemEvent", () => {

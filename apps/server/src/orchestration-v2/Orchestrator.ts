@@ -108,6 +108,7 @@ import {
 import { EventSinkV2 } from "./EventSink.ts";
 import {
   decideGuestMessageSend,
+  withoutGuestAttribution,
   decideGuestShareCommand,
   type GuestShareCommand,
 } from "./GuestShareDecider.ts";
@@ -2719,7 +2720,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       occurredAt: now,
       payload: decided.success.thread,
     });
-    return decided.success.text;
+    return decided.success;
   });
 
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
@@ -8464,6 +8465,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: "Automatic completion deliveries cannot be edited.",
       });
     }
+    // The agent text and the shown text of a guest message must stay the guest's words.
+    if (queuedMessage.context?.guest !== undefined) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "A guest's message cannot be edited. Cancel it instead.",
+      });
+    }
     const queuedTurnItem = projection.turnItems.find(
       (candidate) => candidate.type === "user_message" && candidate.messageId === queuedMessage.id,
     );
@@ -8479,13 +8488,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
       providerInstanceId: queuedRun.providerInstanceId,
       occurredAt: now,
-      payload: {
+      payload: withoutGuestAttribution({
         ...queuedMessage,
         text: command.text,
         ...editedAttachments,
         ...(command.context ? { context: command.context } : {}),
         updatedAt: now,
-      },
+      }),
     });
     if (queuedTurnItem !== undefined && queuedTurnItem.type === "user_message") {
       yield* emitEvent({
@@ -8495,13 +8504,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        payload: {
+        payload: withoutGuestAttribution({
           ...queuedTurnItem,
           text: command.text,
           ...editedAttachments,
           ...(command.context ? { context: command.context } : {}),
           updatedAt: now,
-        },
+        }),
       });
     }
   });
@@ -11603,11 +11612,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             threadId: command.threadId,
           });
         }
-        const guestText =
+        const guestSend =
           command.guestMessageId === undefined
             ? undefined
             : yield* emitGuestMessageSent(command, command.guestMessageId, thread, events);
-        const dispatched = guestText === undefined ? command : { ...command, text: guestText };
+        const dispatched =
+          guestSend === undefined
+            ? withoutGuestAttribution(command)
+            : {
+                ...command,
+                text: guestSend.text,
+                context: { version: 1 as const, records: [], guest: guestSend.guest },
+              };
         yield* dispatchMessage(dispatched, events, effects);
         yield* recordSubagentFollowup(dispatched, events).pipe(mapDispatchError(command));
         break;

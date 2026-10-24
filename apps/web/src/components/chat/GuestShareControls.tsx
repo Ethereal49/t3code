@@ -3,7 +3,12 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { GuestMessageId, ScopedThreadRef, ThreadGuestShare } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type GuestMessageId,
+  type ScopedThreadRef,
+  type ThreadGuestShare,
+} from "@t3tools/contracts";
 import { CheckIcon, CopyIcon, UserIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -12,8 +17,10 @@ import { useNowMinute } from "~/hooks/useNowMinute";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useQuietThreadProjection } from "~/state/entities";
 import { serverEnvironment } from "~/state/server";
+import { useEnvironmentScope } from "~/state/session";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { cn } from "~/lib/utils";
 import { useOrchestrationCommand } from "~/state/use-orchestration-command";
 import { Button } from "../ui/button";
 import {
@@ -26,8 +33,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ComposerBanner } from "./ComposerBanner";
+import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { guestShareDialogThreadAtom } from "./guestShareDialogState";
 
 function useThreadGuestShare(threadRef: ScopedThreadRef | null): ThreadGuestShare | null {
@@ -202,74 +208,79 @@ function GuestShareStatus({ share }: { readonly share: ThreadGuestShare }) {
   );
 }
 
-/** Guest messages wait here until the owner sends or dismisses each one. */
-export function GuestMessagesBar({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+/**
+ * A guest's messages wait at the end of the timeline until the owner sends or dismisses each one.
+ * Sent ones then show in the timeline as normal user messages with the guest's name.
+ */
+export function GuestPendingMessages({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   const share = useThreadGuestShare(threadRef);
+  const canOperate = useEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope);
   const resolveGuestMessage = useOrchestrationCommand(threadEnvironment.resolveGuestMessage, {
     label: "resolve guest message",
   });
-  const [busyId, setBusyId] = useState<GuestMessageId | null>(null);
+  const [busyIds, setBusyIds] = useState<ReadonlySet<GuestMessageId>>(new Set());
   const pending = share?.messages.filter((message) => message.status === "pending") ?? [];
   if (share === null || pending.length === 0) return null;
   const guestName = share.guestName ?? "Guest";
 
   const resolve = async (guestMessageId: GuestMessageId, decision: "send" | "dismiss") => {
-    setBusyId(guestMessageId);
+    setBusyIds((ids) => new Set(ids).add(guestMessageId));
     await resolveGuestMessage({
       environmentId: threadRef.environmentId,
       input: { threadId: threadRef.threadId, guestMessageId, decision },
     });
-    setBusyId(null);
+    setBusyIds((ids) => {
+      const next = new Set(ids);
+      next.delete(guestMessageId);
+      return next;
+    });
   };
 
   return (
-    <ComposerBanner.Attachment>
-      <ComposerBanner.Root
-        role="region"
-        aria-label={`${pending.length} guest message${pending.length === 1 ? "" : "s"}`}
-        aria-live="polite"
-        data-chat-composer-collapsed-controls="true"
-        className="relative z-0"
-      >
-        <ComposerBanner.Children render={<ol />}>
-          {pending.map((message) => (
-            <ComposerBanner.Row render={<li />} key={message.id}>
-              <ComposerBanner.Icon>
-                <UserIcon />
-              </ComposerBanner.Icon>
-              <ComposerBanner.Content className="text-foreground/80">
-                <span className="shrink-0 text-muted-foreground">{guestName} (guest):</span>
-                <Tooltip>
-                  <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
-                    {message.text}
-                  </TooltipTrigger>
-                  <TooltipPopup side="top" className="max-w-96 break-words whitespace-pre-wrap">
-                    {message.text}
-                  </TooltipPopup>
-                </Tooltip>
-              </ComposerBanner.Content>
-              <ComposerBanner.Actions>
+    <ol
+      className="chat-content-lane flex flex-col gap-4 pb-4"
+      aria-label={`${pending.length} guest message${pending.length === 1 ? "" : "s"} waiting`}
+      aria-live="polite"
+    >
+      {pending.map((message) => {
+        const busy = busyIds.has(message.id);
+        return (
+          <li key={message.id} className="flex flex-col items-end gap-1">
+            <GuestMessageName name={guestName} />
+            <div
+              className={cn(
+                "min-w-0 max-w-[80%] rounded-2xl p-3 text-foreground",
+                guestBubbleClassName(true),
+              )}
+            >
+              <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {message.text}
+              </p>
+            </div>
+            {canOperate ? (
+              <div className="flex items-center gap-1 pe-1">
                 <Button
                   size="xs"
                   variant="ghost-muted"
-                  disabled={busyId !== null}
+                  disabled={busy}
+                  aria-label={`Dismiss message from ${guestName}`}
                   onClick={() => void resolve(message.id, "dismiss")}
                 >
                   Dismiss
                 </Button>
                 <Button
                   size="xs"
-                  variant="outline"
-                  disabled={busyId !== null}
+                  disabled={busy}
+                  aria-label={`Send message from ${guestName}`}
                   onClick={() => void resolve(message.id, "send")}
                 >
                   Send
                 </Button>
-              </ComposerBanner.Actions>
-            </ComposerBanner.Row>
-          ))}
-        </ComposerBanner.Children>
-      </ComposerBanner.Root>
-    </ComposerBanner.Attachment>
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
   );
 }

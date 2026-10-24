@@ -6,21 +6,28 @@ import {
   type GuestShareView,
   type GuestSubmitRequest,
   type GuestTranscriptItem,
+  type ThreadGuestMessage,
   type ThreadGuestMessageStatus,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { ArrowUpIcon, CircleDashedIcon } from "lucide-react";
 import { useEffect, useReducer, useState, type FormEvent, type KeyboardEvent } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { useNowMinute } from "~/hooks/useNowMinute";
+import { cn } from "~/lib/utils";
+import { GuestMessageName, guestBubbleClassName } from "../chat/guestMessageStyle";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Textarea } from "../ui/textarea";
 import {
   applyGuestStreamEvent,
+  formatGuestExpiry,
   initialGuestStreamState,
+  type GuestStreamState,
   parseGuestStreamEvent,
+  unplacedGuestMessages,
 } from "./guestStream.logic";
 
 let capturedInvite: { readonly credential: string | null } | null = null;
@@ -72,8 +79,11 @@ async function postGuest(
 const STATUS_LABEL: Record<ThreadGuestMessageStatus, string> = {
   pending: "Waiting for approval",
   sent: "Sent",
-  dismissed: "Dismissed",
+  dismissed: "Not sent",
 };
+
+/** Same column as the owner's timeline, so both views wrap text at the same width. */
+const LANE = "chat-content-lane px-4";
 
 export function GuestPage() {
   const [credential] = useState(takeInviteCredential);
@@ -81,14 +91,8 @@ export function GuestPage() {
   // not stand in for the thread this link points at.
   const [joined, setJoined] = useState(false);
 
-  useEffect(() => {
-    const root = document.documentElement;
-    root.classList.add("dark");
-    delete root.dataset.themeId;
-  }, []);
-
   return (
-    <div className="flex h-dvh flex-col bg-black text-white">
+    <div className="flex h-dvh flex-col bg-background text-foreground">
       {credential !== null && !joined ? (
         <NameForm credential={credential} onJoined={() => setJoined(true)} />
       ) : (
@@ -123,15 +127,29 @@ function GuestSession() {
   }, []);
 
   if (stream.ended || (rejected && stream.view !== null)) {
-    return <Notice text="This link has ended." />;
+    return <Notice title="This link has ended" detail="The owner stopped sharing this thread." />;
   }
-  if (stream.view !== null) return <GuestThread view={stream.view} items={stream.items} />;
-  if (!rejected) return <Notice text="Connecting..." />;
-  return <Notice text="This link has ended or is not valid." />;
+  if (stream.view !== null) {
+    return (
+      <GuestThread view={stream.view} items={stream.items} seenPendingIds={stream.seenPendingIds} />
+    );
+  }
+  if (!rejected) return <Notice title="Connecting..." />;
+  return (
+    <Notice
+      title="This link has ended or is not valid"
+      detail="Ask the owner for a new link. Each link works in one browser."
+    />
+  );
 }
 
-function Notice({ text }: { readonly text: string }) {
-  return <p className="m-auto p-6 text-sm text-white/70">{text}</p>;
+function Notice({ title, detail }: { readonly title: string; readonly detail?: string }) {
+  return (
+    <div className="m-auto flex max-w-sm flex-col gap-1 p-6 text-center">
+      <p className="text-sm font-medium">{title}</p>
+      {detail ? <p className="text-xs text-muted-foreground">{detail}</p> : null}
+    </div>
+  );
 }
 
 function NameForm({
@@ -155,7 +173,8 @@ function NameForm({
     else setError(failure);
   };
   return (
-    <form className="m-auto flex w-full max-w-sm flex-col gap-3 p-6" onSubmit={submit}>
+    <form className="m-auto flex w-full max-w-xs flex-col gap-3 p-6" onSubmit={submit}>
+      <h1 className="text-base font-medium">Join a shared thread</h1>
       <label className="flex flex-col gap-1.5 text-sm" htmlFor="guest-name">
         Your name
         <Input
@@ -175,56 +194,114 @@ function NameForm({
       <Button type="submit" disabled={submitting || name.trim() === ""}>
         Join
       </Button>
+      <p className="text-xs text-muted-foreground">
+        The owner sees your name and approves each message before the agent gets it.
+      </p>
     </form>
   );
 }
 
 function GuestThread({
-  view: { title, working, messages },
+  view: { title, working, expiresAt, messages },
   items,
+  seenPendingIds,
 }: {
   readonly view: GuestShareView;
   readonly items: ReadonlyArray<GuestTranscriptItem>;
+  readonly seenPendingIds: GuestStreamState["seenPendingIds"];
 }) {
+  const unplaced = unplacedGuestMessages(messages, items, seenPendingIds);
+  const ownMessageIds = new Set(messages.map((message) => message.id));
   return (
     <>
-      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2">
+      <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-2.5">
         <h1 className="min-w-0 flex-1 truncate text-sm font-medium">{title}</h1>
-        {working ? <span className="text-xs text-white/60">Working</span> : null}
+        {working ? (
+          <span className="flex items-center gap-1 text-xs text-info">
+            <CircleDashedIcon aria-hidden className="size-3.5" />
+            Working
+          </span>
+        ) : null}
+        <ExpiryLabel expiresAt={expiresAt} />
       </header>
       {/* column-reverse keeps the view pinned to the newest reply while the reader is at the bottom. */}
       <div className="scrollbar-gutter-both flex min-h-0 flex-1 flex-col-reverse overflow-y-auto">
-        <ol className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-4">
+        <ol className={cn(LANE, "flex flex-col gap-4 py-6")}>
           {items.map((item) => (
             <li key={item.id}>
-              <TranscriptItem item={item} />
+              <TranscriptItem item={item} ownMessageIds={ownMessageIds} />
+            </li>
+          ))}
+          {unplaced.map((message) => (
+            <li key={message.id}>
+              <UnplacedGuestMessage message={message} />
             </li>
           ))}
         </ol>
       </div>
-      <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-2 px-4 pb-4">
-        {messages.length > 0 ? (
-          <ul className="flex flex-col gap-1 border-t border-white/10 pt-2 text-xs">
-            {messages.map((message) => (
-              <li key={message.id} className="flex gap-3">
-                <span className="min-w-0 flex-1 truncate text-white/80">{message.text}</span>
-                <span className="shrink-0 text-white/50">{STATUS_LABEL[message.status]}</span>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+      <div className={cn(LANE, "shrink-0 pb-4")}>
         <GuestComposer />
       </div>
     </>
   );
 }
 
-function TranscriptItem({ item }: { readonly item: GuestTranscriptItem }) {
+function ExpiryLabel({ expiresAt }: { readonly expiresAt: string }) {
+  const nowMinute = useNowMinute();
+  return (
+    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+      {formatGuestExpiry(expiresAt, Date.parse(`${nowMinute}Z`))}
+    </span>
+  );
+}
+
+const BUBBLE =
+  "min-w-0 max-w-[80%] rounded-2xl p-3 text-sm whitespace-pre-wrap [overflow-wrap:anywhere]";
+
+/** A guest message the owner has not sent yet, or chose not to send. */
+function UnplacedGuestMessage({ message }: { readonly message: ThreadGuestMessage }) {
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <GuestMessageName name="You" />
+      <div
+        className={cn(
+          BUBBLE,
+          guestBubbleClassName(message.status !== "sent"),
+          message.status === "dismissed" ? "text-muted-foreground" : "text-message-foreground",
+        )}
+      >
+        {message.text}
+      </div>
+      <p className="me-1 text-2xs text-muted-foreground">{STATUS_LABEL[message.status]}</p>
+    </div>
+  );
+}
+
+function TranscriptItem({
+  item,
+  ownMessageIds,
+}: {
+  readonly item: GuestTranscriptItem;
+  readonly ownMessageIds: ReadonlySet<string>;
+}) {
   switch (item.kind) {
     case "user":
       return (
-        <div className="border-l-2 border-white/30 pl-3 text-sm whitespace-pre-wrap">
-          {item.text}
+        <div className="flex flex-col items-end gap-1">
+          {item.guestMessageId ? (
+            <GuestMessageName
+              name={ownMessageIds.has(item.guestMessageId) ? "You" : (item.guestName ?? "Guest")}
+            />
+          ) : null}
+          <div
+            className={cn(
+              BUBBLE,
+              "text-message-foreground",
+              item.guestMessageId ? guestBubbleClassName(false) : "bg-message",
+            )}
+          >
+            {item.text}
+          </div>
         </div>
       );
     case "assistant":
@@ -232,19 +309,19 @@ function TranscriptItem({ item }: { readonly item: GuestTranscriptItem }) {
     case "plan":
       return (
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-white/50">Plan</span>
+          <span className="text-xs text-muted-foreground">Plan</span>
           <GuestMarkdown text={item.text} />
         </div>
       );
     case "question":
       return (
-        <div className="flex flex-col gap-2 text-sm">
+        <div className="flex flex-col gap-3 text-sm">
           {item.questions.map((question) => (
             <div key={question.question} className="flex flex-col gap-1">
-              <span className="text-xs text-white/50">{question.header || "Question"}</span>
+              <span className="text-xs text-muted-foreground">{question.header || "Question"}</span>
               <p>{question.question}</p>
               {question.options.length > 0 ? (
-                <ul className="list-disc pl-5 text-white/70">
+                <ul className="list-disc ps-5 text-muted-foreground">
                   {question.options.map((option) => (
                     <li key={option}>{option}</li>
                   ))}
@@ -255,7 +332,7 @@ function TranscriptItem({ item }: { readonly item: GuestTranscriptItem }) {
         </div>
       );
     case "tool":
-      return <p className="truncate text-xs text-white/40">{item.label}</p>;
+      return <p className="truncate text-xs text-muted-foreground">{item.label}</p>;
   }
 }
 
@@ -266,7 +343,7 @@ const MARKDOWN_COMPONENTS: Components = {
 
 function GuestMarkdown({ text }: { readonly text: string }) {
   return (
-    <div className="chat-markdown min-w-0 text-sm leading-relaxed [overflow-wrap:anywhere]">
+    <div className="chat-markdown min-w-0 text-sm leading-relaxed text-foreground/80 [overflow-wrap:anywhere]">
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
         {text}
       </ReactMarkdown>
@@ -289,34 +366,48 @@ function GuestComposer() {
     if (failure === null) setText((current) => (current.trim() === trimmed ? "" : current));
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    // Same as the app composer: Enter sends, Shift+Enter adds a line, IME composition is left alone.
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void send();
     }
   };
   return (
     <form
-      className="flex flex-col gap-2"
+      className="flex flex-col gap-2 rounded-3xl border border-border bg-card px-4 pt-3 pb-2.5 shadow-composer dark:shadow-composer-dark"
       onSubmit={(event) => {
         event.preventDefault();
         void send();
       }}
     >
-      <Textarea
+      <textarea
         aria-label="Message"
         placeholder="Message"
+        rows={2}
         maxLength={GUEST_MESSAGE_MAX_LENGTH}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={onKeyDown}
+        className="max-h-60 min-h-12 w-full resize-none bg-transparent text-sm outline-none field-sizing-content placeholder:text-placeholder"
       />
       <div className="flex items-center gap-3">
-        <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
-          {error}
-        </p>
-        <Button type="submit" size="sm" disabled={sending || text.trim() === ""}>
-          Send
-        </Button>
+        {error !== null ? (
+          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
+            {error}
+          </p>
+        ) : (
+          <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            The owner approves each message
+          </p>
+        )}
+        <button
+          type="submit"
+          aria-label="Send"
+          disabled={sending || text.trim() === ""}
+          className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full bg-message-action text-message-action-foreground shadow-xs hover:bg-message-action-hover focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-64"
+        >
+          <ArrowUpIcon aria-hidden className="size-4" />
+        </button>
       </div>
     </form>
   );

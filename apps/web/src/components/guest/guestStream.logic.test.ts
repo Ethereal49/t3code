@@ -1,10 +1,17 @@
-import type { GuestShareView, GuestStreamEvent } from "@t3tools/contracts";
+import {
+  GuestMessageId,
+  type GuestShareView,
+  type GuestStreamEvent,
+  type ThreadGuestMessage,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   applyGuestStreamEvent,
+  formatGuestExpiry,
   initialGuestStreamState,
   parseGuestStreamEvent,
+  unplacedGuestMessages,
   type GuestStreamState,
 } from "./guestStream.logic";
 
@@ -39,7 +46,26 @@ describe("applyGuestStreamEvent", () => {
       view,
       items: [{ kind: "user", id: "u1", text: "hi", streaming: false }],
       ended: false,
+      seenPendingIds: new Set(),
     });
+  });
+
+  it("remembers waiting messages across a reconnect", () => {
+    const waiting = {
+      id: GuestMessageId.make("m1"),
+      text: "Why?",
+      status: "pending" as const,
+      submittedAt: "2026-10-23T10:00:00.000Z",
+    };
+    const state = apply([
+      { type: "snapshot", view: { ...view, messages: [waiting] }, items: [] },
+      {
+        type: "snapshot",
+        view: { ...view, messages: [{ ...waiting, status: "sent" }] },
+        items: [],
+      },
+    ]);
+    expect([...state.seenPendingIds]).toEqual([waiting.id]);
   });
 
   it("upserts items by id and keeps their order", () => {
@@ -84,5 +110,48 @@ describe("parseGuestStreamEvent", () => {
     expect(parseGuestStreamEvent(JSON.stringify({ type: "ended" }))).toEqual({ type: "ended" });
     expect(parseGuestStreamEvent("{not json")).toBeNull();
     expect(parseGuestStreamEvent(JSON.stringify({ type: "unknown" }))).toBeNull();
+  });
+});
+
+describe("unplacedGuestMessages", () => {
+  const message = (id: string, status: ThreadGuestMessage["status"], submittedAt: string) => ({
+    id: GuestMessageId.make(id),
+    text: id,
+    status,
+    submittedAt,
+  });
+  const placedItem = (id: string) => ({
+    kind: "user" as const,
+    id: `u-${id}`,
+    text: id,
+    streaming: false,
+    guestMessageId: GuestMessageId.make(id),
+  });
+
+  it("shows pending ones, and resolved ones only if this page saw them waiting", () => {
+    const messages = [
+      message("late", "pending", "2026-10-23T10:05:00.000Z"),
+      message("placed", "sent", "2026-10-23T10:00:00.000Z"),
+      message("queued", "sent", "2026-10-23T09:59:00.000Z"),
+      message("dismissed", "dismissed", "2026-10-23T10:01:00.000Z"),
+      message("old-history", "sent", "2026-10-23T09:00:00.000Z"),
+    ];
+    const seen = new Set(
+      ["placed", "queued", "dismissed", "late"].map((id) => GuestMessageId.make(id)),
+    );
+    expect(unplacedGuestMessages(messages, [placedItem("placed")], seen).map((m) => m.id)).toEqual([
+      "queued",
+      "dismissed",
+      "late",
+    ]);
+  });
+});
+
+describe("formatGuestExpiry", () => {
+  const now = Date.parse("2026-10-23T00:00:00.000Z");
+  it("shows whole hours, then minutes, then expired", () => {
+    expect(formatGuestExpiry("2026-10-23T23:59:00.000Z", now)).toBe("23h left");
+    expect(formatGuestExpiry("2026-10-23T00:45:30.000Z", now)).toBe("45m left");
+    expect(formatGuestExpiry("2026-10-23T00:00:00.000Z", now)).toBe("Expired");
   });
 });

@@ -165,7 +165,7 @@ import {
 } from "../previewMiniPlayerStore";
 import { threadPullRequestPanelTarget } from "./pullRequest/pullRequestDetail.logic";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
-import { GuestMessagesBar, GuestShareDialogHost } from "./chat/GuestShareControls";
+import { GuestPendingMessages } from "./chat/GuestShareControls";
 import { useDeviceState } from "~/state/device";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
@@ -2953,10 +2953,28 @@ export default function ChatView(props: ChatViewProps) {
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
+  const pendingGuestMessageCount = serverThreadShell?.pendingGuestMessageCount ?? 0;
+  const previousPendingGuestMessagesRef = useRef({
+    threadKey: routeThreadKey,
+    count: pendingGuestMessageCount,
+  });
+  useEffect(() => {
+    const previous = previousPendingGuestMessagesRef.current;
+    previousPendingGuestMessagesRef.current = {
+      threadKey: routeThreadKey,
+      count: pendingGuestMessageCount,
+    };
+    // Opening another thread is not a new message; its own scroll position wins.
+    if (previous.threadKey !== routeThreadKey) return;
+    // Pending guest messages sit in the list footer, which the list does not follow on its own.
+    // The follow flag reflects the owner's position before the footer grew; a live measure may not.
+    if (pendingGuestMessageCount > previous.count && timelineLiveFollowEnabled) {
+      scrollToEnd(true);
+    }
+  }, [routeThreadKey, pendingGuestMessageCount, timelineLiveFollowEnabled, scrollToEnd]);
   const queuedRunsControl =
     isServerThread && activeThread ? (
       <>
-        <GuestMessagesBar threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)} />
         <QueuedRunsControl
           ref={queuedRunsControlRef}
           steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
@@ -3312,18 +3330,26 @@ export default function ChatView(props: ChatViewProps) {
                 {...(onOpenWorktreeSetupTerminal ? { onOpenWorktreeSetupTerminal } : {})}
                 isPreparingWorktree={!paintOnlyDisplayedTimeline && isPreparingWorktree}
                 footer={
-                  paintOnlyDisplayedTimeline ? null : pendingHandoff === null ? (
-                    threadStatusLine
-                  ) : (
+                  paintOnlyDisplayedTimeline ||
+                  (pendingHandoff === null &&
+                    pendingGuestMessageCount === 0 &&
+                    threadStatusLine === null) ? null : (
                     <>
-                      <div className="chat-content-lane">
-                        <HandoffRow
-                          environmentId={environmentId}
-                          endpoints={pendingHandoff}
-                          providers={providerStatuses}
-                          pending
+                      {pendingHandoff === null ? null : (
+                        <div className="chat-content-lane">
+                          <HandoffRow
+                            environmentId={environmentId}
+                            endpoints={pendingHandoff}
+                            providers={providerStatuses}
+                            pending
+                          />
+                        </div>
+                      )}
+                      {pendingGuestMessageCount > 0 && isServerThread && activeThread ? (
+                        <GuestPendingMessages
+                          threadRef={scopeThreadRef(activeThread.environmentId, activeThread.id)}
                         />
-                      </div>
+                      ) : null}
                       {threadStatusLine}
                     </>
                   )
@@ -3912,7 +3938,6 @@ export default function ChatView(props: ChatViewProps) {
 
       <RevertConfirmHost threadKey={routeThreadKey} onConfirm={onConfirmRevertStable} />
       <LinkPullRequestDialogHost />
-      <GuestShareDialogHost />
       <ThreadVisitWatermark threadRef={routeThreadRef} />
       <ExpandedImageDialogHost threadKey={routeThreadKey} />
     </div>

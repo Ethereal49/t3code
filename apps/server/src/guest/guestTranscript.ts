@@ -34,6 +34,16 @@ export function guestTranscriptItem(item: OrchestrationV2TurnItem): GuestTranscr
       ) {
         return null;
       }
+      if (item.context?.guest !== undefined) {
+        return {
+          kind: "user",
+          id: item.id,
+          text: item.context.guest.text,
+          streaming: false,
+          guestMessageId: item.context.guest.guestMessageId,
+          guestName: item.context.guest.name,
+        };
+      }
       return { kind: "user", id: item.id, text: item.text, streaming: false };
     case "assistant_message":
       return { kind: "assistant", id: item.id, text: item.text, streaming: item.streaming };

@@ -2,7 +2,9 @@ import {
   GUEST_PENDING_MESSAGE_LIMIT,
   GUEST_RESOLVED_MESSAGE_LIMIT,
   GUEST_SHARE_HISTORY_RUNS,
+  type GuestMessageAttribution,
   type GuestMessageId,
+  type OrchestrationMessageContext,
   type OrchestrationV2AppThread,
   type OrchestrationV2ServerCommand,
   type ThreadGuestMessage,
@@ -139,19 +141,39 @@ export function decideGuestShareCommand(input: {
 }
 
 /**
- * Marks a guest message sent and returns the text the agent receives. The text names the guest
- * so neither the owner nor the agent mistakes it for the owner's own words.
+ * Marks a guest message sent. `text` is what the agent receives: it names the guest so the agent
+ * does not mistake it for the owner's words, and so a guest cannot start a slash command.
+ * `guest` lets clients show the guest's own text with their name beside it.
  */
 export function decideGuestMessageSend(input: {
   readonly thread: OrchestrationV2AppThread;
   readonly guestMessageId: GuestMessageId;
   readonly now: DateTime.Utc;
-}): Result.Result<{ readonly thread: OrchestrationV2AppThread; readonly text: string }, string> {
+}): Result.Result<
+  {
+    readonly thread: OrchestrationV2AppThread;
+    readonly text: string;
+    readonly guest: GuestMessageAttribution;
+  },
+  string
+> {
   const share = input.thread.guestShare ?? null;
   if (share === null) return Result.fail("This thread has no guest link.");
   const message = share.messages.find((candidate) => candidate.id === input.guestMessageId);
+  const name = share.guestName ?? "Guest";
+  const guestText = message?.text ?? "";
   return Result.map(resolveMessage(share, input.guestMessageId, "sent"), (next) => ({
     thread: { ...input.thread, guestShare: next, updatedAt: input.now },
-    text: `Message from guest ${share.guestName ?? "guest"}, sent by the owner:\n\n${message?.text ?? ""}`,
+    text: `Message from guest ${name}, sent by the owner:\n\n${guestText}`,
+    guest: { guestMessageId: input.guestMessageId, name, text: guestText },
   }));
+}
+
+/** Guest attribution comes only from `decideGuestMessageSend`; a client cannot claim it. */
+export function withoutGuestAttribution<
+  C extends { readonly context?: OrchestrationMessageContext | undefined },
+>(command: C): C {
+  if (command.context?.guest === undefined) return command;
+  const { guest: _guest, ...context } = command.context;
+  return { ...command, context };
 }

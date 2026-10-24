@@ -124,6 +124,11 @@ it.effect("redeems a guest link once and sends each guest message once, with its
       sent?.text,
       "Message from guest Sam, sent by the owner:\n\nWhy not keep the old cache?",
     );
+    assert.deepEqual(sent?.context?.guest, {
+      guestMessageId,
+      name: "Sam",
+      text: "Why not keep the old cache?",
+    });
     assert.lengthOf(projection.runs, 1);
     assert.equal((yield* projections.getThreadShell(threadId))?.pendingGuestMessageCount, 0);
 
@@ -153,5 +158,91 @@ it.effect("rejects guest messages until the link is redeemed and after archive",
       threadId,
     });
     assert.isNull((yield* projections.getThread(threadId)).guestShare ?? null);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("drops guest attribution that a client sends on its own message", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("owner-message"),
+      threadId,
+      messageId: MessageId.make("owner-message"),
+      text: "Mine",
+      context: { version: 1, records: [], guest: { guestMessageId, name: "Sam", text: "Mine" } },
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const projection = yield* projections.getThreadProjection(threadId);
+    const sent = projection.messages.find(
+      (message) => message.id === MessageId.make("owner-message"),
+    );
+    assert.isUndefined(sent?.context?.guest);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("keeps a queued guest message unchanged when the owner tries to edit it", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* setup;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("owner-first"),
+      threadId,
+      messageId: MessageId.make("owner-first"),
+      text: "Start",
+      attachments: [],
+      dispatchMode: { type: "defer_start" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-share.redeem",
+      commandId: CommandId.make("redeem"),
+      threadId,
+      shareId,
+      guestName: "Sam",
+    });
+    yield* orchestrator.dispatch({
+      type: "thread.guest-message.submit",
+      commandId: CommandId.make("submit"),
+      threadId,
+      shareId,
+      guestMessageId,
+      text: "Why?",
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-queued"),
+      threadId,
+      messageId: MessageId.make("send-queued"),
+      guestMessageId,
+      text: "",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    });
+    const queued = (yield* projections.getThreadProjection(threadId)).runs.find(
+      (run) => run.status === "queued",
+    );
+    assert.isDefined(queued);
+
+    const edit = orchestrator.dispatch({
+      type: "queued-run.edit",
+      commandId: CommandId.make("edit"),
+      threadId,
+      runId: queued.id,
+      text: "My own words",
+    });
+    assert.isTrue(Exit.isFailure(yield* Effect.exit(edit)));
+    const message = (yield* projections.getThreadProjection(threadId)).messages.find(
+      (candidate) => candidate.id === MessageId.make("send-queued"),
+    );
+    assert.equal(message?.context?.guest?.text, "Why?");
   }).pipe(Effect.provide(layerTest)),
 );

@@ -9,9 +9,10 @@ until you send or dismiss it.
 Guest links need [T3 Connect](./remote-access.md), because the link points at your machine's
 T3 Connect address. Your machine must stay online while the guest uses it.
 
-1. Open the thread and choose **Share with guest** from the thread menu or the command palette.
+1. Right-click the thread in the sidebar and choose **Share with guest**. It is also in the thread
+   menu and the command palette.
 2. Copy the link and send it to one person. It works once and expires after 24 hours.
-3. When they send a message, it appears above your composer and the thread shows **Awaiting Input**.
+3. When they send a message, it appears at the end of the thread and the sidebar shows **Request**.
    Choose **Send** to run it as a normal turn, or **Dismiss**.
 
 Choose **Stop sharing** to end the link at once. Archiving the thread, creating a new link, or
