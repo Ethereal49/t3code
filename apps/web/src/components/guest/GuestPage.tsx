@@ -13,11 +13,10 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { ArrowUpIcon, CircleDashedIcon } from "lucide-react";
 import { useEffect, useReducer, useState, type FormEvent, type KeyboardEvent } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 import { useNowMinute } from "~/hooks/useNowMinute";
 import { cn } from "~/lib/utils";
+import ChatMarkdown from "../ChatMarkdown";
 import { GuestMessageName, guestBubbleClassName } from "../chat/guestMessageStyle";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -305,12 +304,12 @@ function TranscriptItem({
         </div>
       );
     case "assistant":
-      return <GuestMarkdown text={item.text} />;
+      return <GuestMarkdown text={item.text} streaming={item.streaming} />;
     case "plan":
       return (
         <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Plan</span>
-          <GuestMarkdown text={item.text} />
+          <GuestMarkdown text={item.text} streaming={item.streaming} />
         </div>
       );
     case "question":
@@ -336,18 +335,25 @@ function TranscriptItem({
   }
 }
 
-const REMARK_PLUGINS = [remarkGfm];
-const MARKDOWN_COMPONENTS: Components = {
-  a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
-};
-
-function GuestMarkdown({ text }: { readonly text: string }) {
+/**
+ * The app's renderer, so code, diagrams, and math look as they do for the owner. With no `cwd`,
+ * thread, or environment, nothing in it can open files or reach the owner's machine.
+ */
+function GuestMarkdown({
+  text,
+  streaming,
+}: {
+  readonly text: string;
+  readonly streaming: boolean;
+}) {
   return (
-    <div className="chat-markdown min-w-0 text-sm leading-relaxed text-foreground/80 [overflow-wrap:anywhere]">
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
-        {text}
-      </ReactMarkdown>
-    </div>
+    <ChatMarkdown
+      text={text}
+      cwd={undefined}
+      isStreaming={streaming}
+      parseRawHtml={false}
+      className="text-foreground"
+    />
   );
 }
 

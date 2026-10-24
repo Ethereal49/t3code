@@ -2954,27 +2954,33 @@ export default function ChatView(props: ChatViewProps) {
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
   // Read from the projection the footer renders, so the scroll below sees the new message.
-  const pendingGuestMessageCount =
-    serverProjection?.thread.guestShare?.messages.filter((message) => message.status === "pending")
-      .length ?? 0;
+  const pendingGuestMessageIds =
+    serverProjection?.thread.guestShare?.messages.flatMap((message) =>
+      message.status === "pending" ? [message.id] : [],
+    ) ?? [];
+  const pendingGuestMessageCount = pendingGuestMessageIds.length;
+  const pendingGuestMessageKey = pendingGuestMessageIds.join(",");
   const previousPendingGuestMessagesRef = useRef({
     threadKey: routeThreadKey,
-    count: pendingGuestMessageCount,
+    key: pendingGuestMessageKey,
   });
   useEffect(() => {
     const previous = previousPendingGuestMessagesRef.current;
     previousPendingGuestMessagesRef.current = {
       threadKey: routeThreadKey,
-      count: pendingGuestMessageCount,
+      key: pendingGuestMessageKey,
     };
     // Opening another thread is not a new message; its own scroll position wins.
     if (previous.threadKey !== routeThreadKey) return;
     // Pending guest messages sit in the list footer, which the list does not follow on its own.
     // The follow flag reflects the owner's position before the footer grew; a live measure may not.
-    if (pendingGuestMessageCount > previous.count && timelineLiveFollowEnabled) {
-      scrollToEnd(true);
-    }
-  }, [routeThreadKey, pendingGuestMessageCount, timelineLiveFollowEnabled, scrollToEnd]);
+    // Any new id counts, even when another one was resolved in the same update.
+    const previousIds = new Set(previous.key.split(","));
+    const hasNewMessage = pendingGuestMessageKey
+      .split(",")
+      .some((id) => id !== "" && !previousIds.has(id));
+    if (hasNewMessage && timelineLiveFollowEnabled) scrollToEnd(true);
+  }, [routeThreadKey, pendingGuestMessageKey, timelineLiveFollowEnabled, scrollToEnd]);
   const queuedRunsControl =
     isServerThread && activeThread ? (
       <>
