@@ -117,6 +117,15 @@ export function GuestPage() {
   // An invite always starts at the name form: a cookie from an earlier share on this host must
   // not stand in for the thread this link points at.
   const [joined, setJoined] = useState(false);
+  // Pasting another guest link into this tab changes only the hash, which does not reload the
+  // page; reload so the new invite is read instead of the one already captured.
+  useEffect(() => {
+    const onHashChange = () => {
+      if (window.location.hash !== "") window.location.reload();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
