@@ -186,8 +186,9 @@ function ThreadRowContext({
   item: CommandPaletteActionItem | CommandPaletteSubmenuItem;
 }) {
   if (!item.threadSearch || !(item.threadContentMatch || item.matchHint)) return null;
+  // A "Project: …" hint already names the project.
   const context = [item.threadSearch.projectTitle, item.threadSearch.environmentLabel]
-    .filter(Boolean)
+    .filter((part) => part && part !== item.matchHint?.text)
     .join(" · ");
   return context ? (
     <span className="max-w-[45%] shrink-0 truncate text-muted-foreground/70 text-xs">

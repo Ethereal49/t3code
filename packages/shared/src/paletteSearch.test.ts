@@ -668,21 +668,24 @@ describe("scoreMessageMatch", () => {
       quality: 1.25,
       offset: together.indexOf("vp run dev"),
     });
-    expect(scoreMessageMatch("dev notes: vp is slow, run it", "vp run dev")?.quality).toBe(1);
+    // Near each other ranks above far apart.
+    expect(scoreMessageMatch("dev notes: vp is slow, run it", "vp run dev")?.quality).toBe(1.1);
+    const far = `run the tests. ${"More notes. ".repeat(10)}Then dev mode, then vp`;
+    expect(scoreMessageMatch(far, "vp run dev")?.quality).toBe(1);
     expect(scoreMessageMatch("I don\u2019t know why", "don't know")?.quality).toBe(1.25);
-    // The snippet shows the longest word, not an early filler word.
-    const phrase = "Yes. Since the last fix, the sidebar works";
-    expect(scoreMessageMatch(phrase, "fix the sidebar")?.offset).toBe(phrase.indexOf("sidebar"));
-    // Words apart: the longest where another word is near.
+    // The snippet starts where the words meet, not at an early one.
+    const phrase = `The plan. ${"More notes. ".repeat(10)}Since the last fix, the sidebar works`;
+    expect(scoreMessageMatch(phrase, "fix the sidebar")?.offset).toBe(phrase.indexOf("fix,"));
     const apart = `The lakebed app. ${"Notes. ".repeat(30)}Lakebed page perf is slow`;
     expect(apart.slice(scoreMessageMatch(apart, "lakebed perf")?.offset)).toMatch(/^Lakebed page/);
     // Only where a word counts: not "fix" in "prefix".
     const prefix = `fix ${"unrelated words ".repeat(40)}prefix has CI`;
     expect(scoreMessageMatch(prefix, "fix ci")?.offset).toBe(0);
-    // A commit SHA is one word: "cafe" inside one only matches inside a word.
-    expect(scoreMessageMatch("see commit 7cafe52bb8", "cafe")).toEqual({
-      quality: 0.3,
-      offset: 12,
+    // A commit SHA is one word: "cafe" inside one does not match, its start does.
+    expect(scoreMessageMatch("see commit 7cafe52bb8", "cafe")).toBeNull();
+    expect(scoreMessageMatch("see commit 7cafe52bb8", "7cafe52")).toEqual({
+      quality: 1,
+      offset: 11,
     });
     expect(scoreMessageMatch("7cafe52bb8, then the cafe", "cafe")?.quality).toBe(1);
     // A whole word beats a word prefix: "mode" prefers "mode" over "model".
@@ -697,10 +700,11 @@ describe("scoreMessageMatch", () => {
     expect(scoreMessageMatch("Switch off the connection", "switch on")).toBeNull();
     expect(scoreMessageMatch("Upgrade pnpm 512 today", "pnpm 12")).toBeNull();
     expect(scoreMessageMatch("Upgrade to pnpm12 today", "pnpm 12")?.quality).toBe(1);
-    // A short word that only starts a longer one is a prefix match.
-    expect(scoreMessageMatch("Fix circle rendering", "fix ci")?.quality).toBe(0.8);
+    // A word too short to search only narrows, so typing the next word
+    // ("nvme s") does not reorder results; written together still counts.
+    expect(scoreMessageMatch("Fix circle rendering", "fix ci")?.quality).toBe(1);
     expect(scoreMessageMatch("Fix CI failures", "fix ci")?.quality).toBe(1.25);
-    expect(scoreMessageMatch("Upgrade pnpm 123 today", "pnpm 12")?.quality).toBe(0.8);
+    expect(scoreMessageMatch("Upgrade pnpm 123 today", "pnpm 12")?.quality).toBe(1);
     expect(scoreMessageMatch("Rename the file to index.ts", ".ts")?.quality).toBe(1);
   });
 

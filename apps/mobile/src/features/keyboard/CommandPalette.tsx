@@ -153,8 +153,13 @@ function PaletteRow(props: {
                 ))
               : props.item.title}
           </Text>
-          {/* The second line shows the snippet or hint, so keep where the thread lives. */}
-          {(props.searchMatch || props.item.matchHint) && props.item.detail ? (
+          {/* The second line shows the snippet or hint, so keep where the thread
+              lives, unless the hint already names it. */}
+          {(props.searchMatch ||
+            (props.item.matchHint &&
+              props.item.matchHint.label !== "Project" &&
+              props.item.matchHint.label !== "Environment")) &&
+          props.item.detail ? (
             <Text
               numberOfLines={1}
               className={cn("max-w-[45%] shrink-0 text-sm", mutedForegroundClassName)}
