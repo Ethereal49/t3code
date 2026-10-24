@@ -175,7 +175,7 @@ const WORK_PHRASES: Record<GuestTool, (count: number) => string> = {
 };
 
 /** "Ran 8 commands, edited files": each kind once, in the order it first ran. */
-export function formatGuestWork(tools: ReadonlyArray<GuestTool>): string {
+function formatGuestWork(tools: ReadonlyArray<GuestTool>): string {
   const counts = new Map<GuestTool, number>();
   for (const tool of tools) counts.set(tool, (counts.get(tool) ?? 0) + 1);
   const line = [...counts].map(([tool, count]) => WORK_PHRASES[tool](count)).join(", ");
