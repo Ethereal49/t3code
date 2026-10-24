@@ -14,14 +14,21 @@ const appVariant: unknown = Constants.expoConfig?.extra?.appVariant;
 /** Whether this build has anywhere to send crash reports. */
 export const crashReportingAvailable = typeof endpointUrl === "string";
 
+let latestConfiguration = 0;
+
 /**
  * While sending is off, each dispatch pass drops the reports it finds. One
  * recorded after the last pass would still go out once sending resumes, so a
  * pass runs before sending is turned back on.
  */
 export async function setCrashReportsEnabled(enabled: boolean) {
+  const configuration = ++latestConfiguration;
   const dispatchingEnabled = crashReportingAvailable && enabled;
-  if (dispatchingEnabled) await Observe.dispatchEvents();
+  if (dispatchingEnabled) {
+    await Observe.dispatchEvents();
+    // A later call, such as an opt-out during the pass, has already applied.
+    if (configuration !== latestConfiguration) return;
+  }
   Observe.configure({
     dispatchingEnabled,
     ...(typeof appVariant === "string" ? { environment: appVariant } : {}),
