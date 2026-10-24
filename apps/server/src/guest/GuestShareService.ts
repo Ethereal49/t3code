@@ -13,7 +13,6 @@ import {
   type OrchestrationV2Run,
   type RunId,
   ThreadId,
-  TurnItemId,
 } from "@t3tools/contracts";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import * as Context from "effect/Context";
@@ -416,30 +415,35 @@ const make = Effect.gen(function* () {
   });
 
   const renderUnavailable = new GuestShareAccessError({ reason: "unavailable" });
-  // Only an item the guest's transcript already shows: a completed render in a run at or after
-  // the history cutoff, whose attachment belongs to this thread.
+  // Only an item the guest's transcript shows right now: the same snapshot window and
+  // visibility rules as the stream, so a rolled-back or out-of-window render is not served.
   const render = Effect.fn("GuestShareService.render")(function* (session: string, itemId: string) {
     const { thread, share } = yield* authorize(session, "session");
-    const item = yield* orchestrator
-      .getTurnItem({ threadId: thread.id, itemId: TurnItemId.make(itemId) })
-      .pipe(Effect.orElseSucceed(() => null));
-    if (item === null || item.runId === null || guestTranscriptItem(item)?.kind !== "html-render") {
-      return yield* renderUnavailable;
-    }
-    const { runs } = yield* orchestrator
-      .getThreadRecords(thread.id, ["runs"])
+    const { projection } = yield* orchestrator
+      .getThreadSnapshotWindow(thread.id, {
+        rowLimit: SNAPSHOT_ROW_LIMIT,
+        userTurnLimit: SNAPSHOT_USER_TURN_LIMIT,
+      })
       .pipe(Effect.mapError(() => inactive));
-    const run = runs.find((candidate) => candidate.id === item.runId);
-    if (run === undefined || !isGuestVisibleRun(run, share.historyStartRunOrdinal)) {
+    const item = projection.visibleTurnItems.find(
+      (entry) => entry.visibility === "local" && entry.item.id === itemId,
+    )?.item;
+    const run = item?.runId == null ? undefined : projection.runs.find((r) => r.id === item.runId);
+    if (
+      item === undefined ||
+      item.type !== "dynamic_tool" ||
+      run === undefined ||
+      !isGuestVisibleRun(run, share.historyStartRunOrdinal) ||
+      guestTranscriptItem(item)?.kind !== "html-render"
+    ) {
       return yield* renderUnavailable;
     }
-    const [attachmentId] =
-      item.type === "dynamic_tool" ? threadHtmlRenderAttachmentIds(thread.id, [item]) : [];
+    const [attachmentId] = threadHtmlRenderAttachmentIds(thread.id, [item]);
     const path =
       attachmentId === undefined
         ? null
         : resolveAttachmentPathById({ attachmentsDir, attachmentId });
-    const reference = item.type === "dynamic_tool" ? htmlRenderFromToolItem(item) : undefined;
+    const reference = htmlRenderFromToolItem(item);
     if (path === null || reference === undefined) return yield* renderUnavailable;
     return { path, title: reference.title };
   });

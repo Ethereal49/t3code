@@ -146,6 +146,8 @@ const renderRoute = HttpRouter.add(
       Effect.flatMap(({ path, title }) =>
         assetFileResponse({ path, mimeType: "text/html", fileName: htmlRenderFileName(title) }),
       ),
+      // Each load re-checks the share, so a closed, replaced, or expired link stops it at once.
+      Effect.map((response) => HttpServerResponse.setHeaders(response, NO_STORE)),
       Effect.catchTags({ GuestShareAccessError: errorResponse }),
     );
   }),
