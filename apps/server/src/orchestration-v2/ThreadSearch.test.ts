@@ -142,7 +142,7 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       for (const match of ['"needle"', null]) {
         const plan = yield* sql<{
           readonly detail: string;
-        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null })}`;
+        }>`EXPLAIN QUERY PLAN ${ThreadSearch.messageHitsQuery(sql, { match, substrings: "[]", projectId: null, excludedThreadIds: "[]" })}`;
         assert.isFalse(
           plan.some((row) => row.detail.includes("TEMP B-TREE")),
           plan.map((row) => row.detail).join("\n"),
@@ -645,6 +645,41 @@ it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
         { discard: true },
       );
       const { matches } = yield* search.searchThreads({ query: "petrel", limit: 5 });
+      assert.include(
+        matches.map((match) => match.threadId),
+        messageOnly,
+      );
+    }),
+  );
+
+  it.effect("leaves titled threads out before the hit limit", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const sql = yield* SqlClient.SqlClient;
+      const project = ProjectId.make("project:hit-limit");
+      const messageOnly = ThreadId.make("thread:grebe-message");
+      const titled = ThreadId.make("thread:grebe-titled");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(messageOnly, project, { title: "Unrelated" }),
+          message(messageOnly, "grebe-old", "user", "a grebe note", { minute: 1 }),
+          thread(titled, project, { title: "Grebe" }),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      // Newer hits than one read holds, all in the titled thread.
+      yield* sql`
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+        INSERT INTO orchestration_v2_projection_messages
+          (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+        SELECT 'grebe-titled-' || i, ${titled}, 'assistant', 0, ${DateTime.formatIso(at(5))},
+          ${DateTime.formatIso(at(5))}, json_object('text', 'grebe again')
+        FROM n
+      `;
+      const { matches } = yield* search.searchThreads({ query: "grebe", limit: 5 });
       assert.include(
         matches.map((match) => match.threadId),
         messageOnly,

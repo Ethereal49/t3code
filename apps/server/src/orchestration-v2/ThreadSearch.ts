@@ -62,6 +62,8 @@ const SearchRequest = Schema.Struct({
   /** Tokens every hit must contain, checked on the text. */
   substrings: TokenList,
   projectId: Schema.NullOr(ProjectId),
+  /** Threads the caller already lists, left out before the hit limit. */
+  excludedThreadIds: TokenList,
 });
 const SearchRow = Schema.Struct({
   messageRowid: Schema.Number,
@@ -101,7 +103,7 @@ const MESSAGE_SCAN_LIMIT = 20_000;
 function buildMessageSearch(
   query: string,
   hasIndex: boolean,
-): Omit<typeof SearchRequest.Type, "projectId"> | null {
+): Omit<typeof SearchRequest.Type, "projectId" | "excludedThreadIds"> | null {
   const { long, short } = messageSearchTokens(query);
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
@@ -159,7 +161,7 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
 // "café"). Exported so a test can check the query plan.
 export const messageHitsQuery = (
   sql: SqlClient.SqlClient,
-  { match, substrings, projectId }: typeof SearchRequest.Encoded,
+  { match, substrings, projectId, excludedThreadIds }: typeof SearchRequest.Encoded,
 ) => sql`
     WITH eligible AS MATERIALIZED (
       SELECT threads.thread_id, threads.project_id
@@ -170,6 +172,7 @@ export const messageHitsQuery = (
         AND threads.archived_at IS NULL
         AND projects.deleted_at IS NULL
         AND (${projectId} IS NULL OR threads.project_id = ${projectId})
+        AND threads.thread_id NOT IN (SELECT value FROM json_each(${excludedThreadIds}))
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
     )
@@ -350,7 +353,11 @@ export const make = Effect.gen(function* () {
         const messageSearch = buildMessageSearch(input.query, index.length > 0);
         return messageSearch === null
           ? []
-          : yield* searchRows({ ...messageSearch, projectId: input.projectId });
+          : yield* searchRows({
+              ...messageSearch,
+              projectId: input.projectId,
+              excludedThreadIds: [...(input.excludedThreadIds ?? [])],
+            });
       }),
     );
     const best = new Map<ThreadId, Hit>();
@@ -361,7 +368,6 @@ export const make = Effect.gen(function* () {
     const hitCount = (threadId: ThreadId) => hitCounts.get(threadId) ?? 1;
     const matchMessage = messageMatcher(input.query);
     for (const row of rows) {
-      if (input.excludedThreadIds?.has(row.threadId)) continue;
       const text = row.text.replace(MARKDOWN_LINK, "$1");
       const match = matchMessage(text);
       if (match === null) continue;

@@ -581,7 +581,7 @@ export interface MessageMatch {
  * query is prepared once, since the server grades thousands of hits for it.
  */
 export function messageMatcher(query: string): (text: string) => MessageMatch | null {
-  const { long, short } = messageSearchTokens(query);
+  const { long, short, words } = messageSearchTokens(query);
   const tokens = [...long, ...short].map((token) => ({
     token,
     // Marks go from the folded token: lowercasing "İ" adds one.
@@ -593,6 +593,12 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     grades: long.includes(token),
   }));
   const phrase = messagePhrase(query);
+  // Accents typed or left out still read as written together: "cafe open"
+  // in "Café open".
+  const foldedPhrase = messagePhrase(
+    words.map((word) => foldInPlace(word).replace(COMBINING_MARKS, "")).join(" "),
+  );
+  const queryNonAscii = NON_ASCII.test(query);
   return (text) => {
     const lower = text.toLowerCase();
     // "İ" lowercases to two units, which would shift every offset after it.
@@ -613,7 +619,12 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     }
     // Written together as typed: the snippet starts there. Apostrophes are
     // straight in the query, and straightening keeps offsets.
-    const together = phrase?.exec(plain.replace(CURLY_APOSTROPHES, "'"));
+    const straight = (value: string) => value.replace(CURLY_APOSTROPHES, "'");
+    const together =
+      phrase?.exec(straight(plain)) ??
+      (queryNonAscii || NON_ASCII.test(text)
+        ? foldedPhrase?.exec(straight((folded ??= foldInPlace(text))))
+        : null);
     if (together) return { quality: quality + MESSAGE_PHRASE_BONUS, offset: together.index };
     // Else the shortest stretch that holds every word: the snippet starts
     // there, so it shows them all, and words close together rank above words

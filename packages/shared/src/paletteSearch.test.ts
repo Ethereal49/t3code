@@ -673,6 +673,8 @@ describe("scoreMessageMatch", () => {
     const far = `run the tests. ${"More notes. ".repeat(10)}Then dev mode, then vp`;
     expect(scoreMessageMatch(far, "vp run dev")?.quality).toBe(1);
     expect(scoreMessageMatch("I don\u2019t know why", "don't know")?.quality).toBe(1.25);
+    expect(scoreMessageMatch("Le Café open late", "cafe open")?.quality).toBe(1.25);
+    expect(scoreMessageMatch("The cafe open late", "café open")?.quality).toBe(1.25);
     // The snippet starts where the words meet, not at an early one.
     const phrase = `The plan. ${"More notes. ".repeat(10)}Since the last fix, the sidebar works`;
     expect(scoreMessageMatch(phrase, "fix the sidebar")?.offset).toBe(phrase.indexOf("fix,"));
