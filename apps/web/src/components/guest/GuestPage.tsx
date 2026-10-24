@@ -140,8 +140,9 @@ export function GuestPage() {
       .then(
         (response): GuestAccess =>
           response.ok ? "session" : credential !== null ? "name" : "none",
-        // Offline: try the stream, which reports what it finds.
-        (): GuestAccess => "session",
+        // Offline: an invite still needs the name form; without one, the stream reports what
+        // it finds once the network is back.
+        (): GuestAccess => (credential !== null ? "name" : "session"),
       )
       .then((next) => {
         if (live) setAccess(next);
